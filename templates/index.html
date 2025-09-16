@@ -5,102 +5,570 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Brighter Shores Bot</title>
     <style>
-      body { font-family: system-ui, Arial, sans-serif; margin: 20px; color: #111; }
-      .row { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
-      input[type=text] { padding: 6px 8px; min-width: 280px; }
-      button { padding: 8px 12px; cursor: pointer; }
-      #status { margin-top: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #f6f8fa; padding: 8px; border-radius: 6px; }
-      #preview { width: 100%; max-width: 960px; border: 1px solid #ddd; border-radius: 6px; }
-      .hdr { font-weight: 700; margin: 12px 0 6px; }
-      #logs { white-space: pre-wrap; background: #0b1020; color: #e8f0ff; padding: 8px; border-radius: 6px; font-family: ui-monospace, monospace; height: 320px; overflow: auto; }
+      /* Modern CSS Variables */
+      :root {
+        --primary-bg: #0a0a0a;
+        --secondary-bg: #1a1a1a;
+        --accent-color: #00d4aa;
+        --accent-hover: #00f5c3;
+        --danger-color: #ff4757;
+        --success-color: #2ed573;
+        --warning-color: #ffa502;
+        --text-primary: #ffffff;
+        --text-secondary: #cccccc;
+        --border-color: #333333;
+        --card-bg: #2a2a2a;
+        --input-bg: #1a1a1a;
+        --shadow: 0 4px 20px rgba(0, 212, 170, 0.1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        margin: 0;
+        padding: 20px;
+        background: linear-gradient(135deg, var(--primary-bg) 0%, #1a1a1a 100%);
+        color: var(--text-primary);
+        min-height: 100vh;
+      }
+
+      .container {
+        max-width: 1400px;
+        margin: 0 auto;
+      }
+
+      .header {
+        text-align: center;
+        margin-bottom: 30px;
+        padding: 20px;
+        background: var(--card-bg);
+        border-radius: 12px;
+        box-shadow: var(--shadow);
+        border: 1px solid var(--border-color);
+      }
+
+      .header h1 {
+        margin: 0;
+        background: linear-gradient(45deg, var(--accent-color), var(--accent-hover));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        font-size: 2.5em;
+        font-weight: 700;
+      }
+
+      .header p {
+        color: var(--text-secondary);
+        margin: 10px 0 0 0;
+        font-size: 1.1em;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        margin-bottom: 20px;
+      }
+
+      .card {
+        background: var(--card-bg);
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: var(--shadow);
+        border: 1px solid var(--border-color);
+        transition: all 0.3s ease;
+      }
+
+      .card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 30px rgba(0, 212, 170, 0.15);
+      }
+
+      .card h3 {
+        margin-top: 0;
+        color: var(--accent-color);
+        font-size: 1.4em;
+        border-bottom: 2px solid var(--accent-color);
+        padding-bottom: 8px;
+      }
+
+      .form-group {
+        margin-bottom: 15px;
+      }
+
+      .form-group label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+
+      .form-group input,
+      .form-group select {
+        width: 100%;
+        padding: 12px 16px;
+        background: var(--input-bg);
+        border: 2px solid var(--border-color);
+        border-radius: 8px;
+        color: var(--text-primary);
+        font-size: 14px;
+        transition: all 0.3s ease;
+      }
+
+      .form-group input:focus,
+      .form-group select:focus {
+        outline: none;
+        border-color: var(--accent-color);
+        box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.1);
+      }
+
+      .form-group input::placeholder {
+        color: var(--text-secondary);
+      }
+
+      .button-group {
+        display: flex;
+        gap: 12px;
+        margin-top: 20px;
+        flex-wrap: wrap;
+      }
+
+      .btn {
+        padding: 12px 24px;
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 14px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        flex: 1;
+        min-width: 120px;
+      }
+
+      .btn-primary {
+        background: var(--accent-color);
+        color: white;
+      }
+
+      .btn-primary:hover {
+        background: var(--accent-hover);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 15px rgba(0, 212, 170, 0.3);
+      }
+
+      .btn-secondary {
+        background: var(--secondary-bg);
+        color: var(--text-primary);
+        border: 1px solid var(--border-color);
+      }
+
+      .btn-secondary:hover {
+        background: var(--border-color);
+      }
+
+      .btn-danger {
+        background: var(--danger-color);
+        color: white;
+      }
+
+      .btn-danger:hover {
+        background: #ff3742;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 15px rgba(255, 71, 87, 0.3);
+      }
+
+      .status-panel {
+        background: var(--secondary-bg);
+        border: 2px solid var(--border-color);
+        border-radius: 8px;
+        padding: 16px;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        max-height: 300px;
+        overflow-y: auto;
+        color: var(--text-primary);
+        background-image: linear-gradient(rgba(0, 212, 170, 0.05) 1px, transparent 1px),
+                         linear-gradient(90deg, rgba(0, 212, 170, 0.05) 1px, transparent 1px);
+        background-size: 20px 20px;
+      }
+
+      .preview-container {
+        position: relative;
+        text-align: center;
+      }
+
+      #preview {
+        max-width: 100%;
+        height: auto;
+        border-radius: 8px;
+        border: 2px solid var(--border-color);
+        box-shadow: var(--shadow);
+      }
+
+      .logs-panel {
+        background: #1e1e1e;
+        border: 2px solid var(--border-color);
+        border-radius: 8px;
+        padding: 16px;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        height: 300px;
+        overflow-y: auto;
+        color: #d4d4d4;
+        background-image: linear-gradient(rgba(212, 212, 212, 0.05) 1px, transparent 1px);
+        background-size: 100% 20px;
+      }
+
+      .status-indicator {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 8px;
+        animation: pulse 2s infinite;
+      }
+
+      .status-running {
+        background: var(--success-color);
+      }
+
+      .status-paused {
+        background: var(--warning-color);
+      }
+
+      .status-stopped {
+        background: var(--danger-color);
+      }
+
+      @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.5; }
+        100% { opacity: 1; }
+      }
+
+      /* Responsive Design */
+      @media (max-width: 768px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        .button-group {
+          flex-direction: column;
+        }
+
+        .btn {
+          margin-bottom: 8px;
+        }
+
+        .header h1 {
+          font-size: 2em;
+        }
+      }
+
+      /* Scrollbar Styling */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: var(--secondary-bg);
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: var(--accent-color);
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: var(--accent-hover);
+      }
+
+      /* Additional styles for enhanced features */
+      .btn.running {
+        background: var(--success-color);
+        animation: pulse 2s infinite;
+      }
+
+      .form-group.focused label {
+        color: var(--accent-color);
+      }
+
+      .form-group.focused input,
+      .form-group.focused select {
+        border-color: var(--accent-color);
+        box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.2);
+      }
+
+      /* Loading animation for buttons */
+      @keyframes buttonPulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(0.98); }
+        100% { transform: scale(1); }
+      }
+
+      .btn:active {
+        animation: buttonPulse 0.1s ease;
+      }
+
+      /* Enhanced card hover effects */
+      .card:hover h3 {
+        color: var(--accent-hover);
+      }
+
+      /* Status highlighting in JSON */
+      .status-true {
+        color: var(--success-color);
+        font-weight: bold;
+      }
+
+      .status-false {
+        color: var(--danger-color);
+        font-weight: bold;
+      }
     </style>
   </head>
   <body>
-    <h2>Brighter Shores Bot</h2>
+    <div class="container">
+      <div class="header">
+        <h1>🎮 Brighter Shores Bot</h1>
+        <p>Advanced computer vision automation for gaming</p>
+      </div>
 
-    <div class="row">
-      <label>Window Title</label>
-      <input id="title" type="text" value="Brighter Shores" />
-    </div>
-    <div class="row">
-      <label>Word</label>
-      <input id="word" type="text" value="Wendigo" />
-    </div>
-    <div class="row">
-      <label>Template (optional)</label>
-      <input id="template" type="text" placeholder="assets\templates\wendigo.png" />
-    </div>
-    <div class="row">
-      <label>Tesseract Path (optional)</label>
-      <input id="tess" type="text" placeholder="C:\Program Files\Tesseract-OCR\tesseract.exe" />
-    </div>
-    <div class="row">
-      <label>Detection Method</label>
-      <select id="method">
-        <option value="auto">Auto (Template → OCR)</option>
-        <option value="template">Template Only</option>
-        <option value="ocr">OCR Only</option>
-      </select>
-    </div>
-    <div class="row">
-      <button id="start">Start</button>
-      <button id="pause">Pause</button>
-      <button id="stop">Stop</button>
-    </div>
+      <div class="grid">
+        <div class="card">
+          <h3>⚙️ Configuration</h3>
+          <form>
+            <div class="form-group">
+              <label for="title">Window Title</label>
+              <input id="title" type="text" value="Brighter Shores" placeholder="Game window title" />
+            </div>
 
-    <div class="hdr">Status</div>
-    <pre id="status">{}</pre>
+            <div class="form-group">
+              <label for="word">Detection Target</label>
+              <input id="word" type="text" value="Wendigo" placeholder="Word to detect" />
+            </div>
 
-    <div class="hdr">Preview</div>
-    <img id="preview" alt="live preview" />
+            <div class="form-group">
+              <label for="template">Template Path (Optional)</label>
+              <input id="template" type="text" placeholder="assets/templates/wendigo.png" />
+            </div>
 
-    <div class="hdr">Logs (tail)</div>
-    <div id="logs"></div>
+            <div class="form-group">
+              <label for="tess">Tesseract Path (Optional)</label>
+              <input id="tess" type="text" placeholder="C:\Program Files\Tesseract-OCR\tesseract.exe" />
+            </div>
+
+            <div class="form-group">
+              <label for="method">Detection Method</label>
+              <select id="method">
+                <option value="auto">🤖 Auto (Template → OCR)</option>
+                <option value="template">🎯 Template Only</option>
+                <option value="ocr">📝 OCR Only</option>
+              </select>
+            </div>
+
+            <div class="button-group">
+              <button id="start" class="btn btn-primary" type="button">▶️ Start</button>
+              <button id="pause" class="btn btn-secondary" type="button">⏸️ Pause</button>
+              <button id="stop" class="btn btn-danger" type="button">⏹️ Stop</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3>📊 Status Monitor</h3>
+          <div id="status" class="status-panel">{}</div>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h3>👁️ Live Preview</h3>
+          <div class="preview-container">
+            <img id="preview" alt="live game preview" />
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>📋 Activity Logs</h3>
+          <div id="logs" class="logs-panel"></div>
+        </div>
+      </div>
+    </div>
 
     <script>
       const $ = (id) => document.getElementById(id);
+
+      // Enhanced button interactions
       const start = async () => {
-        const body = {
-          title: $("title").value,
-          word: $("word").value,
-          template: $("template").value || null,
-          tesseract_path: $("tess").value || null,
-          method: $("method").value,
-        };
-        await fetch('/api/start', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+        const startBtn = $("start");
+        startBtn.textContent = "⏳ Starting...";
+        startBtn.disabled = true;
+
+        try {
+          const body = {
+            title: $("title").value,
+            word: $("word").value,
+            template: $("template").value || null,
+            tesseract_path: $("tess").value || null,
+            method: $("method").value,
+          };
+
+          const response = await fetch('/api/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+          });
+
+          if (response.ok) {
+            startBtn.textContent = "▶️ Running";
+            startBtn.classList.add('running');
+          } else {
+            throw new Error('Start failed');
+          }
+        } catch (e) {
+          startBtn.textContent = "❌ Error";
+          setTimeout(() => {
+            startBtn.textContent = "▶️ Start";
+            startBtn.disabled = false;
+          }, 2000);
+        }
       };
-      const pause = () => fetch('/api/pause', { method: 'POST'});
-      const stop = () => fetch('/api/stop', { method: 'POST'});
 
+      const pause = async () => {
+        const pauseBtn = $("pause");
+        pauseBtn.textContent = "⏸️ Pausing...";
+
+        try {
+          await fetch('/api/pause', { method: 'POST' });
+          pauseBtn.textContent = "⏸️ Paused";
+          $("start").textContent = "▶️ Start";
+          $("start").disabled = false;
+          $("start").classList.remove('running');
+        } catch (e) {
+          pauseBtn.textContent = "❌ Error";
+          setTimeout(() => pauseBtn.textContent = "⏸️ Pause", 2000);
+        }
+      };
+
+      const stop = async () => {
+        const stopBtn = $("stop");
+        stopBtn.textContent = "⏹️ Stopping...";
+
+        try {
+          await fetch('/api/stop', { method: 'POST' });
+          stopBtn.textContent = "⏹️ Stopped";
+          $("start").textContent = "▶️ Start";
+          $("start").disabled = false;
+          $("start").classList.remove('running');
+          $("pause").textContent = "⏸️ Pause";
+        } catch (e) {
+          stopBtn.textContent = "❌ Error";
+          setTimeout(() => stopBtn.textContent = "⏹️ Stop", 2000);
+        }
+      };
+
+      // Event listeners
       $("start").onclick = start;
-      $("pause").onclick = () => pause();
-      $("stop").onclick = () => stop();
+      $("pause").onclick = pause;
+      $("stop").onclick = stop;
 
+      // Enhanced polling with better error handling and UI updates
       async function poll() {
         try {
-          const r = await fetch('/api/status');
-          const j = await r.json();
-          const nice = { ...j };
-          if (nice.last_result && nice.last_result.boxes) {
-            nice.last_result.count = nice.last_result.count || nice.last_result.boxes.length;
+          const statusResponse = await fetch('/api/status');
+          if (statusResponse.ok) {
+            const statusData = await statusResponse.json();
+            const nice = { ...statusData };
+
+            // Add count if missing
+            if (nice.last_result && nice.last_result.boxes) {
+              nice.last_result.count = nice.last_result.count || nice.last_result.boxes.length;
+            }
+
+            // Update status with syntax highlighting
+            const formattedStatus = JSON.stringify(nice, null, 2)
+              .replace(/"running":\s*(true|false)/g, '"running": <span class="status-$1">$1</span>')
+              .replace(/"paused":\s*(true|false)/g, '"paused": <span class="status-$1">$1</span>');
+
+            $("status").innerHTML = formattedStatus;
+
+            // Update button states based on status
+            const startBtn = $("start");
+            const pauseBtn = $("pause");
+
+            if (nice.running && !nice.paused) {
+              startBtn.textContent = "▶️ Running";
+              startBtn.classList.add('running');
+              pauseBtn.textContent = "⏸️ Pause";
+            } else if (nice.running && nice.paused) {
+              startBtn.textContent = "⏸️ Paused";
+              startBtn.classList.remove('running');
+              pauseBtn.textContent = "▶️ Resume";
+            } else {
+              startBtn.textContent = "▶️ Start";
+              startBtn.classList.remove('running');
+              startBtn.disabled = false;
+              pauseBtn.textContent = "⏸️ Pause";
+            }
           }
-          $("status").textContent = JSON.stringify(nice, null, 2);
-          // Bust cache
-          $("preview").src = '/api/preview.jpg?ts=' + Date.now();
+
+          // Update preview with cache busting
+          const previewImg = $("preview");
+          previewImg.src = '/api/preview.jpg?ts=' + Date.now();
+
         } catch (e) {
-          // ignore
+          console.warn('Status update failed:', e);
         }
+
         try {
-          const lr = await fetch('/api/logs/tail?n=200');
-          if (lr.status === 200) {
-            const text = await lr.text();
-            $("logs").textContent = text;
-            $("logs").scrollTop = $("logs").scrollHeight;
+          const logsResponse = await fetch('/api/logs/tail?n=200');
+          if (logsResponse.ok) {
+            const logsText = await logsResponse.text();
+            const logsDiv = $("logs");
+            logsDiv.textContent = logsText;
+            logsDiv.scrollTop = logsDiv.scrollHeight;
           }
-        } catch (e) {}
+        } catch (e) {
+          console.warn('Logs update failed:', e);
+        }
       }
+
+      // Start polling
       setInterval(poll, 500);
       poll();
+
+      // Add some visual enhancements
+      document.addEventListener('DOMContentLoaded', function() {
+        // Add loading animation to buttons
+        const buttons = document.querySelectorAll('.btn');
+        buttons.forEach(btn => {
+          btn.addEventListener('click', function() {
+            this.style.transform = 'scale(0.98)';
+            setTimeout(() => {
+              this.style.transform = '';
+            }, 100);
+          });
+        });
+
+        // Add focus effects to inputs
+        const inputs = document.querySelectorAll('input, select');
+        inputs.forEach(input => {
+          input.addEventListener('focus', function() {
+            this.parentElement.classList.add('focused');
+          });
+          input.addEventListener('blur', function() {
+            this.parentElement.classList.remove('focused');
+          });
+        });
+      });
     </script>
   </body>
   </html>
