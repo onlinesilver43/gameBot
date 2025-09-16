@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Brighter Shores Bot</title>
+    <style>
+      body { font-family: system-ui, Arial, sans-serif; margin: 20px; color: #111; }
+      .row { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+      input[type=text] { padding: 6px 8px; min-width: 280px; }
+      button { padding: 8px 12px; cursor: pointer; }
+      #status { margin-top: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #f6f8fa; padding: 8px; border-radius: 6px; }
+      #preview { width: 100%; max-width: 960px; border: 1px solid #ddd; border-radius: 6px; }
+      .hdr { font-weight: 700; margin: 12px 0 6px; }
+      #logs { white-space: pre-wrap; background: #0b1020; color: #e8f0ff; padding: 8px; border-radius: 6px; font-family: ui-monospace, monospace; height: 320px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <h2>Brighter Shores Bot</h2>
+
+    <div class="row">
+      <label>Window Title</label>
+      <input id="title" type="text" value="Brighter Shores" />
+    </div>
+    <div class="row">
+      <label>Word</label>
+      <input id="word" type="text" value="Wendigo" />
+    </div>
+    <div class="row">
+      <label>Template (optional)</label>
+      <input id="template" type="text" placeholder="assets\templates\wendigo.png" />
+    </div>
+    <div class="row">
+      <label>Tesseract Path (optional)</label>
+      <input id="tess" type="text" placeholder="C:\Program Files\Tesseract-OCR\tesseract.exe" />
+    </div>
+    <div class="row">
+      <label>Detection Method</label>
+      <select id="method">
+        <option value="auto">Auto (Template → OCR)</option>
+        <option value="template">Template Only</option>
+        <option value="ocr">OCR Only</option>
+      </select>
+    </div>
+    <div class="row">
+      <button id="start">Start</button>
+      <button id="pause">Pause</button>
+      <button id="stop">Stop</button>
+    </div>
+
+    <div class="hdr">Status</div>
+    <pre id="status">{}</pre>
+
+    <div class="hdr">Preview</div>
+    <img id="preview" alt="live preview" />
+
+    <div class="hdr">Logs (tail)</div>
+    <div id="logs"></div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const start = async () => {
+        const body = {
+          title: $("title").value,
+          word: $("word").value,
+          template: $("template").value || null,
+          tesseract_path: $("tess").value || null,
+          method: $("method").value,
+        };
+        await fetch('/api/start', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+      };
+      const pause = () => fetch('/api/pause', { method: 'POST'});
+      const stop = () => fetch('/api/stop', { method: 'POST'});
+
+      $("start").onclick = start;
+      $("pause").onclick = () => pause();
+      $("stop").onclick = () => stop();
+
+      async function poll() {
+        try {
+          const r = await fetch('/api/status');
+          const j = await r.json();
+          const nice = { ...j };
+          if (nice.last_result && nice.last_result.boxes) {
+            nice.last_result.count = nice.last_result.count || nice.last_result.boxes.length;
+          }
+          $("status").textContent = JSON.stringify(nice, null, 2);
+          // Bust cache
+          $("preview").src = '/api/preview.jpg?ts=' + Date.now();
+        } catch (e) {
+          // ignore
+        }
+        try {
+          const lr = await fetch('/api/logs/tail?n=200');
+          if (lr.status === 200) {
+            const text = await lr.text();
+            $("logs").textContent = text;
+            $("logs").scrollTop = $("logs").scrollHeight;
+          }
+        } catch (e) {}
+      }
+      setInterval(poll, 500);
+      poll();
+    </script>
+  </body>
+  </html>
