@@ -15,11 +15,8 @@ from bsbot.core.config import load_profile, load_keys
 
 
 def create_app() -> Flask:
-    # Find the templates directory relative to the bsbot package
-    import os
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    templates_dir = os.path.join(current_dir, '..', '..', 'templates')
-    app = Flask(__name__, static_folder=None, template_folder=templates_dir)
+    # Templates are now in the same directory as this file
+    app = Flask(__name__, static_folder=None, template_folder='templates')
     logger = init_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
     rt = DetectorRuntime()
     # register global hotkeys: Ctrl+Alt+P (pause/resume), Ctrl+Alt+O (kill)
