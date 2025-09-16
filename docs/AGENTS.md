@@ -1,0 +1,51 @@
+# Agent Collaboration Guide (Scope: Repository Root)
+
+This repository is designed for collaboration between multiple AI agents (e.g., Codex CLI and Groc5fast) and humans. Follow these conventions to coordinate safely and efficiently.
+
+## Roles
+- Codex (you): Product/Tech lead — owns roadmap, architecture, quality, and integration.
+- Groc5fast: Fast implementer — focuses on well-scoped tasks defined in `docs/TASKS.md`, adhering to code style and tests.
+
+## Coordination Protocol
+- Source of truth for work items: `docs/TASKS.md` (single list with owners and states).
+- Design decisions: append entries to `docs/DECISIONS.md` (date, context, decision, consequences).
+- Status updates: `docs/STATUS.md` (short, current, human-readable).
+- Architecture reference: `docs/ARCHITECTURE.md` (keep in sync with implementation).
+
+## Task Lifecycle
+1. Create/Update a task in `docs/TASKS.md` with:
+   - id, title, owner (`codex` or `groc5`), state (`todo|doing|review|done`)
+   - acceptance criteria, affected files, test/validation steps
+2. Implement minimal changes to satisfy acceptance criteria.
+3. Validate locally (scripts in `scripts/`), attach any artifacts under `assets/`.
+4. Update the task state and `docs/STATUS.md` succinctly.
+
+## Coding Conventions
+- Keep changes minimal and focused on the task.
+- Prefer template detection; use OCR only as fallback.
+- Build for Windows; PowerShell scripts live in `scripts/` and must run from anywhere.
+- Log clearly to `logs/app.log`; avoid noisy stack traces in normal flow.
+- Add tests only where adjacent patterns exist; otherwise keep lightweight runners in `src/main.py`.
+
+## UI/Runtime Conventions
+- Web UI on port 8083; avoid breaking existing endpoints.
+- Expose detection status as structured JSON: `found`, `count`, `boxes`, `confidence`, `method`, `total_detections`.
+- Hotkeys: Ctrl+Alt+P (pause/resume), Ctrl+Alt+O (kill) — do not change without updating docs and UI text.
+
+## Templates & Assets
+- Place templates in `assets/templates/` with descriptive names (e.g., `wendigo.png`).
+- Place full screenshots in `assets/images/` for extraction/testing.
+- Do not commit personal data.
+
+## Communication Notes
+- Write messages in tasks using explicit prefixes if helpful: `CODEX:` or `GROC5:`
+- Keep comments short and action-oriented.
+
+## Safety & Scope
+- Screen-based only (no memory reads).
+- Be conservative with input automation; always keep a dry-run path during development.
+- Preserve panic/stop controls and foreground checks before sending inputs (when implemented).
+
+---
+
+Last updated: now

@@ -1,0 +1,23 @@
+{
+    "terminal.integrated.defaultProfile.linux": "PowerShell",
+    "terminal.integrated.profiles.linux": {
+        "PowerShell": {
+            "path": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe",
+            "args": [],
+            "icon": "terminal-powershell"
+        },
+        "Bash": {
+            "path": "bash",
+            "args": [],
+            "icon": "terminal-bash"
+        }
+    },
+    "terminal.integrated.cwd": "/mnt/c/gameAuto/gameBot",
+    "powershell.powerShellAdditionalExePaths": [
+        {
+            "exePath": "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe",
+            "versionName": "Windows PowerShell"
+        }
+    ],
+    "powershell.powerShellDefaultVersion": "Windows PowerShell"
+}

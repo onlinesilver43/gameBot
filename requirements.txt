@@ -1,0 +1,8 @@
+opencv-python
+numpy
+mss
+pytesseract
+pywin32
+pillow
+flask
+keyboard
