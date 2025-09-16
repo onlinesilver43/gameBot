@@ -1,0 +1,25 @@
+# Loot Detection Elements
+# Configurations for detecting and collecting loot
+
+common_loot:
+  regions:
+    - [0.15, 0.3, 0.7, 0.5]
+  anchors:
+    - { color: "0xFFFFFF", tolerance: 28 }  # White text
+    - { color: "0xFFFF00", tolerance: 36 }  # Yellow items
+  confidence_threshold: 0.6
+
+rare_loot:
+  regions:
+    - [0.2, 0.2, 0.6, 0.6]
+  anchors:
+    - { color: "0x8000FF", tolerance: 40 }  # Purple items
+    - { color: "0xFFD700", tolerance: 40 }  # Gold items
+  confidence_threshold: 0.65
+
+epic_loot:
+  regions:
+    - [0.1, 0.1, 0.8, 0.8]
+  anchors:
+    - { color: "0xFF4500", tolerance: 40 }  # Orange-red
+  confidence_threshold: 0.7

@@ -1,0 +1,38 @@
+# Brighter Shores Bot Profile Configuration
+# Window and runtime settings
+
+# Game Window
+window_title: "Brighter Shores"
+monitor_index: 1  # 0=primary, 1=secondary, etc.
+
+# Window Position/Size
+x: 0
+y: 0
+width: 1280
+height: 720
+
+# UI Scaling (if game supports it)
+ui_scale: 1.0
+
+# Runtime Settings
+input_delay_ms: 200
+scan_interval_ms: 500
+action_timeout_ms: 5000
+
+# Safety Settings
+panic_key: "ctrl+alt+p"
+health_threshold: 0.3
+mana_threshold: 0.2
+
+# Detection Settings
+detection_method: "template"  # template, ocr, or auto
+confidence_threshold: 0.65
+roi_x: 0.2
+roi_y: 0.25
+roi_width: 0.6
+roi_height: 0.5
+
+# Debug Settings
+debug_enabled: false
+log_level: "INFO"
+save_screenshots: false

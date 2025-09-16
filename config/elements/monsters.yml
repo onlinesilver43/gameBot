@@ -1,0 +1,26 @@
+# Monster Detection Elements
+# Template and color configurations for enemy detection
+
+wendigo:
+  template: "assets/templates/wendigo.png"
+  regions:
+    - [0.2, 0.25, 0.6, 0.5]  # Central ROI
+  anchors:
+    - { color: "0xFF0000", tolerance: 30 }  # Red health bars
+  confidence_threshold: 0.65
+  click_offset: [0, -20]
+
+basic_enemy:
+  regions:
+    - [0.1, 0.1, 0.8, 0.6]
+  anchors:
+    - { color: "0xFF0000", tolerance: 30 }
+  confidence_threshold: 0.6
+
+boss_enemy:
+  regions:
+    - [0.05, 0.05, 0.9, 0.7]
+  anchors:
+    - { color: "0xFFD700", tolerance: 40 }  # Gold/yellow
+  confidence_threshold: 0.7
+  click_offset: [0, -30]

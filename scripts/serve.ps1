@@ -14,6 +14,6 @@ try {
     $env:LOG_LEVEL = "$LogLevel"
     if ($TesseractPath) { $env:TESSERACT_PATH = $TesseractPath }
     Write-Host "Serving UI on http://127.0.0.1:$Port" -ForegroundColor Green
-    & $venvPy -m src.server
+    & $venvPy -m bsbot.ui.server
 }
 finally { Pop-Location }

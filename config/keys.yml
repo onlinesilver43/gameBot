@@ -1,0 +1,31 @@
+# Brighter Shores Key Bindings
+# Customize these to match your game's key setup
+
+# Combat Actions
+attack: "left_click"
+special_attack: "right_click"
+target_nearest: "tab"
+target_next: "q"
+
+# Movement
+move_forward: "w"
+move_backward: "s"
+move_left: "a"
+move_right: "d"
+sprint: "shift"
+
+# Abilities & Items
+heal: "1"
+mana_restore: "2"
+buff: "3"
+
+# UI & Interaction
+inventory: "i"
+character: "c"
+map: "m"
+interact: "e"
+loot: "f"
+
+# System
+menu: "esc"
+quest_log: "j"

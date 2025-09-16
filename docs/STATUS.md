@@ -1,6 +1,6 @@
 # Current Status
 
-Updated: now
+Updated: now - R0-3 cancelled, reverted to working R0-2 state
 
 ## Summary
 - UI server (port 8083) runs with Start/Pause/Stop and global hotkeys.
