@@ -11,7 +11,7 @@ if (-not (Test-Path $Screenshot)) { Write-Error "Screenshot not found: $Screensh
 Push-Location $root
 try {
     Write-Host "==> Extracting template from screenshot" -ForegroundColor Cyan
-    & $venvPy -m src.main --save-template-from "$Screenshot" --template "$Template"
+    & $venvPy -m bsbot.tools.detect_cli --save-template-from "$Screenshot" --template "$Template"
     if ($LASTEXITCODE -eq 0) {
         Write-Host "Saved template to $Template" -ForegroundColor Green
     } else {

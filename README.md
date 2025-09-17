@@ -69,9 +69,10 @@ Troubleshooting
 Repository Structure (key bits)
 - `bsbot/` — main package
   - `ui/server.py` — Flask server for the UI
-  - `runtime/service.py` — capture + detection loop
-  - `vision/` — OCR and template detection
-  - `platform/` — Win32 window utilities and screen capture
+  - `runtime/service.py` — capture loop + skill orchestration
+  - `skills/` — pluggable controllers (combat implemented, more to follow)
+  - `vision/` — OCR and template detection primitives
+  - `platform/` — Win32 helpers (windowing, capture, human-like input)
 - `scripts/` — PowerShell helpers (`setup.ps1`, `serve.ps1`, `test-window.ps1`, `extract-template.ps1`)
 - `assets/` — templates and screenshots (optional)
 - `config/` — optional YAML configuration

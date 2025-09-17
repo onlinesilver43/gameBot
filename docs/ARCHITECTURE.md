@@ -1,84 +1,76 @@
 # Architecture
 
-This project is a Windows screen‑automation bot for Brighter Shores. It is purely screen/IO based: no game memory reads. The runtime captures frames from the game window, detects on‑screen targets, decides what to do next, and simulates inputs with safety guards. A local web UI (port 8083) controls and observes the bot.
+The Brighter Shores bot is a Windows-only, screen-driven automation framework. The runtime captures frames from the game window, routes each frame through a skill-specific controller (combat, fishing, etc.), and optionally issues human-like inputs with built-in safety guards. A local web UI on port 8083 orchestrates and observes the active skill.
 
-## High‑Level Components
+## High-Level Components
 
-- Capture & Windowing
-  - `src/window.py` — Win32 helpers to find client rect, focus window, DPI awareness.
-  - `src/capture.py` — `mss`-based client‑rect screen capture (returns BGR frames).
-- Detection
-  - `src/detect.py` — Hybrid detection:
-    - Template matching (edge‑based) as primary for fixed UI words/icons.
-    - OCR (Tesseract) fallback for robustness and template bootstrapping.
-    - HSV color gates for red/teal UI text, non‑max suppression (NMS), OCR hardening.
-  - `src/template_tools.py` — Heuristic template extractor from full screenshots (e.g., auto‑crop “Wendigo”).
-- Runtime
-  - `src/runtime.py` — Bot loop thread:
-    - Computes ROI → capture → detect (template or OCR) → update status → produce preview overlay.
-    - Tracks counters (`count`, `total_detections`), debuggable JSON `last_result`.
-    - Future: state machine (Idle, Scan, Engage, Loot, Skill, Recover).
-- Input
-  - `src/input.py` — [planned] Mouse/keyboard simulation and humanized timing (rate limits, jitter, cooldowns).
-- Control & Observability
-  - `src/server.py` — Flask server (UI + API), serves:
-    - `POST /api/start|pause|stop` — runtime control.
-    - `GET /api/status` — snapshot with counts, boxes, method, confidence.
-    - `GET /api/preview.jpg` — annotated ROI JPEG.
-    - `GET /api/logs/tail` — rotating log tail.
-    - `GET /api/diag` — dependency versions.
-  - `src/hotkeys.py` — Global hotkeys (Ctrl+Alt+P pause/resume, Ctrl+Alt+O kill) via `keyboard` if present or Win32 `RegisterHotKey` fallback.
-  - `src/logging_setup.py` — Rotating file (`logs/app.log`) + console logger.
-- CLI utilities
-  - `src/main.py` — Minimal runners for testing screenshot/window detection from the shell.
+- Platform & IO (`bsbot/platform/`)
+  - `win32/window.py` — Win32 helpers for window discovery, focus, cursor position, DPI.
+  - `platform/capture.py` — `mss`-based screen capture returning BGR frames for a given rect.
+  - `platform/input.py` — Human-like mouse click helper with jitter, cooldowns, and foreground checks.
+- Vision (`bsbot/vision/`)
+  - `detect.py` — OCR + template primitives with NMS filtering and hitbox helpers.
+  - `templates.py` — Utilities to extract and persist template images from screenshots.
+- Skills (`bsbot/skills/`)
+  - `base.py` — `SkillController` contract and `FrameContext` metadata.
+  - `combat/controller.py` — OCR-first combat state machine (nameplate → attack → prepare → weapon → loop).
+  - Additional skills plug in by subclassing `SkillController`.
+- Runtime (`bsbot/runtime/service.py`)
+  - `DetectorRuntime` thread owns capture loop, status JSON, timeline logging, and delegates frames to the active skill controller.
+  - Maintains shared event/timeline buffer and manages live vs. dry-run click mode.
+- Control & Observability (`bsbot/ui/`)
+  - `server.py` — Flask server exposing `/api/start|pause|stop`, `/api/status`, `/api/preview.jpg`, diagnostics, and timeline endpoints.
+  - `templates/index.html` — Modern UI with configuration form, live preview, logs, timeline, and click-mode selector.
+  - `hotkeys.py` — Global hotkeys (Ctrl+Alt+P Pause/Resume, Ctrl+Alt+O Kill) using `keyboard` or Win32 fallback.
+- CLI Utilities (`bsbot/main.py` & scripts)
+  - PowerShell scripts under `scripts/` bootstrap the venv, run the server, capture tests, and template extraction.
 
 ## Data & Config
 
-- Assets
-  - `assets/templates/` — Edge‑matching templates (e.g., `wendigo.png`).
-  - `assets/images/` — Full screenshots for template extraction and tests.
-- Config (planned)
-  - Profiles: window title, ROIs per feature, delays, method preferences.
-  - Keys: action bindings (attack, loot, interact, etc.).
-  - Elements: detection params for monsters/loot/buttons.
+- `assets/templates/` — Edge-detected templates (e.g., `wendigo.png`).
+- `assets/images/` — Full screenshots for testing and template extraction.
+- `config/profile.yml` — Default window title, ROI, delays, and detection thresholds.
+- `config/keys.yml` — Key bindings for combat/interaction actions.
+- `config/elements/` — Per-element detection hints (monsters, loot, etc.).
 
 ## Detection Pipelines
 
-- Template (Primary)
-  - Preprocess: grayscale + Canny edges → `cv2.matchTemplate` (TM_CCOEFF_NORMED).
-  - Threshold + NMS ⇒ zero or more boxes. Confidence = best match score.
-  - Pros: fast, low false positives for fixed UI. Cons: sensitive to scale/visual changes.
-- OCR (Fallback / Bootstrap)
-  - Preprocess: HSV red mask → grayscale → upscale → Tesseract `image_to_data`.
-  - Hardened parsing; optional NMS of word boxes. Confidence often near zero on stylized HUD text.
-  - Pros: no templates required; Cons: slower, noisier.
+- **Template (Primary for stable UI tokens)**
+  - Grayscale + Canny edges → `cv2.matchTemplate` (TM_CCOEFF_NORMED).
+  - Thresholded results deduplicated with NMS.
+  - Strength: precise when the UI asset is consistent.
+- **OCR (Primary for text, fallback when templates miss)**
+  - Red-mask pass for enemy nameplates, grayscale fallback for white-on-dark buttons.
+  - Uses `pytesseract.image_to_data`, filters by size/aspect, applies NMS.
+  - Strength: no template required, works across variants.
 
-## Runtime Loop (Current)
+## Runtime Loop
 
-1. Find window client rect; compute central ROI (configurable).
-2. Capture ROI; run template or OCR pipeline.
-3. Draw overlays; encode JPEG; update `last_result` and counters.
-4. Sleep 300 ms; repeat until paused/stopped.
+1. Acquire game window rect; compute skill-configured ROI.
+2. Capture ROI via `bsbot.platform.capture.grab_rect`.
+3. Build a `FrameContext` and dispatch to the active `SkillController` (combat by default).
+4. Skill returns detection result JSON and an annotated preview.
+5. Runtime updates shared status, logs timeline events, and, when in live mode, plays back scheduled human-like clicks.
+6. Sleep ~300 ms and repeat until paused or stopped.
 
 ## Safety & Controls
 
-- Foreground focus checks (planned before sending input).
-- Global hotkeys: pause/resume and kill.
-- Panic via UI Stop.
-- Rate‑limited actions (to be enforced in `input.py`).
+- Foreground checks before issuing live clicks; cooldowns and jitter emulate human input.
+- Global hotkeys (Ctrl+Alt+P/Ctrl+Alt+O) provide immediate pause/kill.
+- `/api/stop` plus UI panic button stop the loop.
+- Click-mode selector allows dry-run validation before enabling live interactions.
 
 ## Extensibility
 
-- New templates/images are just files + thresholds.
-- Future YAML profiles to define ROIs, elements, keys without code changes.
-- Behavior layer can evolve from a simple state machine to behavior trees.
-
----
+- Register new skills by subclassing `SkillController` and calling `DetectorRuntime.register_skill()`.
+- Shared OCR/template primitives keep detection logic DRY across skills.
+- Input helpers live in one place (`platform/input.py`) so all skills inherit consistent safety behavior.
+- Config and UI can surface skill-specific parameters without altering the runtime thread.
 
 ## Open Technical Items
 
-- ROI editor in UI (drag to set/save relative rects).
-- Decision layer: Combat state machine, dry‑run click simulator.
-- Input driver with humanized timing + cooldowns.
-- Template scaling pyramid for small DPI drift.
-- Per‑template stats and threshold auto‑suggest.
+- UI ROI editor for interactive capture tuning.
+- Additional skills (fishing, woodcutting) built on the new controller framework.
+- Expanded input driver (keyboard combos, drag/hold actions).
+- Adaptive template scaling for DPI drift.
+- Telemetry for per-template confidence trends and auto-threshold suggestions.

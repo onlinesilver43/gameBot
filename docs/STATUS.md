@@ -24,6 +24,7 @@ Updated: GROC5 Phase Complete - Ready for R1 Features
 - **Detection Enhancement**: OCR deduplication with size/aspect ratio filtering
 - **Method Selection**: Dynamic Template/OCR/Auto detection modes
 - **Modern Interface**: CSS Grid, custom properties, smooth animations, responsive design
+- **Modular Skills**: Runtime delegates frames to pluggable skill controllers (combat implemented first) with shared input/detection primitives
 
 ## Current Capabilities
 - **Detection Methods**: Auto (Template→OCR), Template Only, OCR Only
@@ -68,6 +69,19 @@ scripts\serve.ps1 -Port 8083 -LogLevel INFO
 - R1-2: Input driver (safe)
 - R1-3: Combat engage loop
 - R1-4: Loot pickup automation
+
+## Combat Detection Phase Plan
+- **Search For Monster** — ROI scanning + OCR/template fallback active 🔄 (untested)
+- **Detect Monster Nameplate** — Wendigo OCR/templating confirmed, timeline logs ✅
+- **Click Monster** — Human click driver wired; needs validation 🔄
+- **Detect Attack Box** — Attack OCR in combat ROI, confidence logged ✅
+- **Click Attack Box** — Human click driver wired; needs validation 🔄
+- **Detect Prepare Box** — Prepare/Choose OCR signals coded, needs validation 🔄
+- **Detect Weapon Box** — Weapon digit OCR (slot 1) coded, needs validation 🔄
+- **Click Weapon Box** — Human click driver wired; needs validation 🔄
+- **Detect Fight Started** — HUD token check coded, needs validation 🔄
+- **Detect Fight Complete** — Absence counter coded, needs validation 🔄
+- **Reset To Search** — FSM recovery path returns to scanning 🔄 (untested)
 
 ## Final Status
 **GROC5 Implementation Phase: COMPLETE ✅**

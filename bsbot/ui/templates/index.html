@@ -374,6 +374,14 @@
               </select>
             </div>
 
+            <div class="form-group">
+              <label for="click_mode">Click Mode</label>
+              <select id="click_mode">
+                <option value="dry_run">🧪 Dry Run (no clicks)</option>
+                <option value="live">🖱️ Real Clicks</option>
+              </select>
+            </div>
+
             <div class="button-group">
               <button id="start" class="btn btn-primary" type="button">▶️ Start</button>
               <button id="pause" class="btn btn-secondary" type="button">⏸️ Pause</button>
@@ -417,13 +425,14 @@
         startBtn.disabled = true;
 
         try {
-          const body = {
-            title: $("title").value,
-            word: $("word").value,
-            template: $("template").value || null,
-            tesseract_path: $("tess").value || null,
-            method: $("method").value,
-          };
+            const body = {
+              title: $("title").value,
+              word: $("word").value,
+              template: $("template").value || null,
+              tesseract_path: $("tess").value || null,
+              method: $("method").value,
+              click_mode: $("click_mode").value,
+            };
 
           const response = await fetch('/api/start', {
             method: 'POST',
@@ -521,6 +530,13 @@
               startBtn.classList.remove('running');
               startBtn.disabled = false;
               pauseBtn.textContent = "⏸️ Pause";
+            }
+
+            if (nice.click_mode) {
+              const modeSelect = $("click_mode");
+              if (modeSelect && modeSelect.value !== nice.click_mode) {
+                modeSelect.value = nice.click_mode;
+              }
             }
           }
 

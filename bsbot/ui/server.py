@@ -38,7 +38,9 @@ def create_app() -> Flask:
         template = data.get("template") or None
         tess = data.get("tesseract_path") or None
         method = data.get("method") or "auto"
+        click_mode = data.get("click_mode") or "dry_run"
         attack_word = data.get("attack_word") or None
+        skill = data.get("skill") or None
         roi = data.get("roi") or None
         if isinstance(roi, list) and len(roi) == 4:
             try:
@@ -47,8 +49,16 @@ def create_app() -> Flask:
                 roi = None
         else:
             roi = None
-        rt.start(title=title, word=word, template_path=template, tesseract_path=tess, method=method, attack_word=attack_word, roi=roi)
-        logger.info("api/start | title=%s word=%s template=%s method=%s", title, word, template, method)
+        rt.start(title=title, word=word, template_path=template, tesseract_path=tess, method=method, attack_word=attack_word, roi=roi, click_mode=click_mode, skill=skill)
+        logger.info(
+            "api/start | title=%s word=%s template=%s method=%s click_mode=%s skill=%s",
+            title,
+            word,
+            template,
+            method,
+            click_mode,
+            skill or rt.status.skill,
+        )
         return jsonify({"ok": True})
 
     @app.post("/api/pause")
@@ -83,6 +93,8 @@ def create_app() -> Flask:
             "word": s.word,
             "template": s.template_path,
             "method": s.method,
+            "click_mode": s.click_mode,
+            "skill": s.skill,
             # Include config values when available
             "profile": profile_config,
             "keys": keys_config,
@@ -143,7 +155,17 @@ def _toggle_pause(rt: DetectorRuntime, logger: logging.Logger):
         rt.pause()
         logger.info("hotkey: pause")
     else:
-        rt.start(title=s.title, word=s.word, template_path=s.template_path, tesseract_path=s.tesseract_path)
+        rt.start(
+            title=s.title,
+            word=s.word,
+            template_path=s.template_path,
+            tesseract_path=s.tesseract_path,
+            method=s.method,
+            attack_word=s.attack_word,
+            roi=s.roi,
+            click_mode=s.click_mode,
+            skill=s.skill,
+        )
         logger.info("hotkey: resume/start")
 
 

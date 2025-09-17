@@ -25,7 +25,7 @@ This repository is designed for collaboration between multiple AI agents (e.g., 
 - Prefer template detection; use OCR only as fallback.
 - Build for Windows; PowerShell scripts live in `scripts/` and must run from anywhere.
 - Log clearly to `logs/app.log`; avoid noisy stack traces in normal flow.
-- Add tests only where adjacent patterns exist; otherwise keep lightweight runners in `src/main.py`.
+- Add tests only where adjacent patterns exist; otherwise keep lightweight runners in `bsbot/tools/detect_cli.py`.
 
 ## UI/Runtime Conventions
 - Web UI on port 8083; avoid breaking existing endpoints.

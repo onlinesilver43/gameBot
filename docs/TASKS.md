@@ -24,7 +24,7 @@
 
 | id | title | owner | state | acceptance criteria |
 |---|---|---|---|---|
-| REORG-1 | Bootstrap `bsbot/` pkg; move logging/window/capture with shims | groc5 | done | `scripts/setup.ps1` and `scripts/test-window.ps1` run; no import errors; shims in `src/` keep old paths working. |
+| REORG-1 | Bootstrap `bsbot/` pkg; move logging/window/capture with shims | groc5 | done | `scripts/setup.ps1` and `scripts/test-window.ps1` run; no import errors; legacy `src/` shims retired. |
 | REORG-2 | Move vision modules (`detect.py`, `template_tools.py`) | groc5 | done | `scripts/extract-template.ps1` creates template; `scripts/test-window.ps1` works in template and OCR modes. |
 | REORG-3 | Move runtime+UI (`runtime.py`, `hotkeys.py`, `server.py`) | groc5 | done | `scripts/serve.ps1` updated to `-m bsbot.ui.server`; UI serves on 8083; hotkeys function. |
 | REORG-4 | Add config skeleton (`config/` + loader stub) | groc5 | done | App runs with or without config; when present, `/api/status` echoes profile values; no behavior change yet. |

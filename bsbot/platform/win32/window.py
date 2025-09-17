@@ -50,3 +50,14 @@ def bring_to_foreground(hwnd: int) -> None:
     except Exception:
         pass
 
+
+def get_foreground_window() -> int | None:
+    hwnd = user32.GetForegroundWindow()
+    return hwnd or None
+
+
+def get_cursor_pos() -> tuple[int, int]:
+    pt = wintypes.POINT()
+    if not user32.GetCursorPos(ctypes.byref(pt)):
+        raise OSError("GetCursorPos failed")
+    return pt.x, pt.y

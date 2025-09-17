@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import os
 import sys
@@ -5,13 +7,17 @@ from typing import Tuple
 
 import cv2
 
-from . import window as win
-from . import capture
-from .detect import detect_word_ocr, detect_with_template, configure_tesseract
-from .template_tools import extract_red_word_template, save_template
+from bsbot.platform import capture
+from bsbot.platform.win32 import window as win
+from bsbot.vision.detect import (
+    configure_tesseract,
+    detect_with_template,
+    detect_word_ocr,
+)
+from bsbot.vision.templates import extract_red_word_template, save_template
 
 
-def _draw_bbox(img, bbox: Tuple[int, int, int, int], color=(0, 0, 255)):
+def _draw_bbox(img, bbox: Tuple[int, int, int, int], color: Tuple[int, int, int] = (0, 0, 255)):
     x, y, w, h = bbox
     cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
 
@@ -41,7 +47,12 @@ def test_screenshot(path: str, word: str = "Wendigo", tesseract_path: str | None
     return 1
 
 
-def test_window_roi(title: str = "Brighter Shores", word: str = "Wendigo", tesseract_path: str | None = None, template_path: str | None = None) -> int:
+def test_window_roi(
+    title: str = "Brighter Shores",
+    word: str = "Wendigo",
+    tesseract_path: str | None = None,
+    template_path: str | None = None,
+) -> int:
     win.make_dpi_aware()
     hwnd = win.find_window_exact(title)
     if not hwnd:
@@ -72,7 +83,7 @@ def test_window_roi(title: str = "Brighter Shores", word: str = "Wendigo", tesse
         return 1
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(description="Detection test utilities")
     ap.add_argument("--test-screenshot", dest="screenshot", help="Path to screenshot image")
     ap.add_argument("--test-window", action="store_true", help="Capture current window ROI and test OCR")
@@ -80,13 +91,18 @@ def main():
     ap.add_argument("--word", default="Wendigo", help="Word to detect")
     ap.add_argument("--tesseract-path", dest="tess", default=None, help="Explicit path to tesseract.exe if not on PATH")
     ap.add_argument("--template", dest="template", default=None, help="Use template image instead of OCR if provided")
-    ap.add_argument("--save-template-from", dest="tmpl_from", default=None, help="Extract a red-word template from a screenshot and save to --template path")
+    ap.add_argument(
+        "--save-template-from",
+        dest="tmpl_from",
+        default=None,
+        help="Extract a red-word template from a screenshot and save to --template path",
+    )
     args = ap.parse_args()
 
     if args.screenshot:
-        sys.exit(test_screenshot(args.screenshot, args.word, args.tess, args.template))
+        return test_screenshot(args.screenshot, args.word, args.tess, args.template)
     if args.test_window:
-        sys.exit(test_window_roi(args.title, args.word, args.tess, args.template))
+        return test_window_roi(args.title, args.word, args.tess, args.template)
     if args.tmpl_from and args.template:
         img = cv2.imread(args.tmpl_from, cv2.IMREAD_COLOR)
         if img is None:
@@ -104,5 +120,5 @@ def main():
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())

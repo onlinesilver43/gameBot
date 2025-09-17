@@ -13,10 +13,10 @@ Push-Location $root
 try {
     if (Test-Path $Template) {
         Write-Host "==> Running template-based detection against window '$Title'" -ForegroundColor Cyan
-        & $venvPy -m src.main --test-window --title "$Title" --template "$Template"
+        & $venvPy -m bsbot.tools.detect_cli --test-window --title "$Title" --template "$Template"
     } else {
         Write-Host "==> Template not found; falling back to OCR for '$Word'" -ForegroundColor Yellow
-        $argsList = @('-m','src.main','--test-window','--title',"$Title",'--word',"$Word")
+        $argsList = @('-m','bsbot.tools.detect_cli','--test-window','--title',"$Title",'--word',"$Word")
         if ($TesseractPath) { $argsList += @('--tesseract-path',"$TesseractPath") }
         & $venvPy @argsList
     }

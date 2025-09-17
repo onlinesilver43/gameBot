@@ -1,6 +1,634 @@
 # Combat Detection Overview
 
-The runtime captures a cropped game frame and runs two parallel detectors to drive combat. Wendigo detection prefers template matching when an asset is provided and otherwise falls back to OCR that is tuned for red HUD text. Attack-button detection reuses the same OCR pipeline but relies on the grayscale fallback that excels at white-on-dark UI elements. Both detectors feed a single state machine that logs timeline events, paints the preview overlay, and prepares dry-run click targets for future input automation.
+Combat detection now lives inside a dedicated skill controller (`bsbot.skills.combat.controller.CombatController`) that drives the OCR-first pipeline, state machine, and planned clicks. The `DetectorRuntime` orchestrator spins the capture loop, delegates each frame to the active skill, and records timeline events while keeping reusable services (capture, logging, human-like clicking) in shared layers.
+
+## bsbot/skills/combat/controller.py
+```python
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+import cv2
+import numpy as np
+
+from bsbot.skills.base import FrameContext, SkillController
+from bsbot.vision.detect import (
+    configure_tesseract,
+    detect_digits_ocr_multi,
+    detect_template_multi,
+    detect_word_ocr_multi,
+)
+
+
+@dataclass
+class PlannedClick:
+    x: int
+    y: int
+    label: str
+
+    def to_tuple(self) -> Tuple[int, int, str]:
+        return self.x, self.y, self.label
+
+
+class CombatController(SkillController):
+    """State machine driving combat detection and interactions."""
+
+    name = "combat"
+
+    def __init__(self, runtime):
+        super().__init__(runtime)
+        self._state = "Scan"
+        self._absent_counter = 0
+        self._last_log_ts = 0.0
+        self._last_found: Optional[bool] = None
+
+    # ------------------------------------------------------------------
+    def on_start(self, params: Dict[str, object] | None = None) -> None:
+        self._state = "Scan"
+        self._absent_counter = 0
+        self._last_log_ts = 0.0
+        self._last_found = None
+        self.runtime.set_state(self._state)
+
+    def on_stop(self) -> None:
+        self._state = "Scan"
+        self.runtime.set_state(self._state)
+
+    def process_frame(self, frame, ctx: FrameContext) -> Tuple[Dict[str, object], Optional[bytes]]:
+        status = self.runtime.status
+        if status.method in {"auto", "ocr"}:
+            configure_tesseract(status.tesseract_path)
+
+        rx, ry = ctx.roi_origin
+        rw, rh = ctx.roi_size
+        roi_rect = [rx, ry, rw, rh]
+
+        boxes: List[Tuple[int, int, int, int]] = []
+        best_conf = 0.0
+        method = status.method
+
+        if method in {"auto", "template"} and status.template_path:
+            tpl = cv2.imread(status.template_path, cv2.IMREAD_COLOR)
+            if tpl is not None:
+                tpl_boxes, scores = detect_template_multi(frame, tpl)
+                boxes = tpl_boxes
+                best_conf = max(scores) if scores else 0.0
+                if method == "auto":
+                    method = "template" if boxes else "ocr_fallback"
+                else:
+                    method = "template"
+
+        if not boxes and method in {"auto", "ocr"}:
+            boxes, best_conf = detect_word_ocr_multi(frame, target=status.word)
+            if method == "auto":
+                method = "ocr_fallback"
+            else:
+                method = "ocr"
+
+        attack_boxes, attack_conf = detect_word_ocr_multi(frame, target=status.attack_word)
+
+        # Focused HUD regions ------------------------------------------------
+        apx, apy = int(0.55 * rw), int(0.20 * rh)
+        apw, aph = int(0.40 * rw), int(0.60 * rh)
+        ppx, ppy = int(0.55 * rw), int(0.07 * rh)
+        ppw, pph = int(0.43 * rw), int(0.86 * rh)
+        bbx, bby = int(0.10 * rw), int(0.83 * rh)
+        bbw, bbh = int(0.80 * rw), int(0.15 * rh)
+
+        attack_panel_roi = frame[apy:apy + aph, apx:apx + apw]
+        prepare_panel_roi = frame[ppy:ppy + pph, ppx:ppx + ppw]
+        bottom_bar_roi = frame[bby:bby + bbh, bbx:bbx + bbw]
+
+        prep_boxes1, prep_conf1 = detect_word_ocr_multi(prepare_panel_roi, target="prepare")
+        prep_boxes2, prep_conf2 = detect_word_ocr_multi(prepare_panel_roi, target="choose")
+        prepare_boxes = [
+            (ppx + bx, ppy + by, bw, bh)
+            for (bx, by, bw, bh) in prep_boxes1 + prep_boxes2
+        ]
+        prepare_conf = max(prep_conf1, prep_conf2)
+
+        spec_boxes_local, spec_conf = detect_word_ocr_multi(bottom_bar_roi, target="special")
+        atks_boxes_local, atks_conf = detect_word_ocr_multi(bottom_bar_roi, target="attacks")
+        spec_boxes = [(bbx + bx, bby + by, bw, bh) for (bx, by, bw, bh) in spec_boxes_local]
+        atks_boxes = [(bbx + bx, bby + by, bw, bh) for (bx, by, bw, bh) in atks_boxes_local]
+        special_attacks_present = bool(spec_boxes and atks_boxes)
+        special_attacks_conf = min(spec_conf, atks_conf) if special_attacks_present else 0.0
+
+        weapons_roi = self._subroi(prepare_panel_roi, (0.0, 0.50, 1.0, 0.50))
+        digit_boxes_local, digit_conf = detect_digits_ocr_multi(weapons_roi, targets=("1",))
+        wpx = ppx
+        wpy = ppy + int(0.50 * pph)
+        digit_boxes = [(wpx + bx, wpy + by, bw, bh) for (bx, by, bw, bh) in digit_boxes_local]
+
+        planned_clicks: List[PlannedClick] = []
+        if boxes:
+            bx, by, bw, bh = boxes[0]
+            cx = rx + bx + bw // 2
+            cy = ry + by + int(1.4 * bh)
+            planned_clicks.append(PlannedClick(cx, cy, "prime_nameplate"))
+        if attack_boxes:
+            bx, by, bw, bh = attack_boxes[0]
+            cx = rx + bx + bw // 2
+            cy = ry + by + bh // 2
+            planned_clicks.append(PlannedClick(cx, cy, "attack_button"))
+        if digit_boxes:
+            bx, by, bw, bh = digit_boxes[0]
+            cx = rx + bx + bw // 2
+            cy = ry + by + bh // 2
+            planned_clicks.append(PlannedClick(cx, cy, "weapon_1"))
+
+        self._emit_detection_events(
+            boxes,
+            best_conf,
+            attack_boxes,
+            attack_conf,
+            prepare_boxes,
+            prepare_conf,
+            special_attacks_present,
+            special_attacks_conf,
+            spec_boxes,
+            atks_boxes,
+            digit_boxes,
+            digit_conf,
+            roi_rect,
+        )
+        self._advance_state(boxes, attack_boxes, prepare_boxes, digit_boxes, special_attacks_present, planned_clicks, roi_rect)
+
+        annotated = frame.copy()
+        for (bx, by, bw, bh) in boxes:
+            cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (0, 0, 255), 2)
+        for (bx, by, bw, bh) in attack_boxes:
+            cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
+        for (bx, by, bw, bh) in prepare_boxes:
+            cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (255, 0, 0), 2)
+        for (bx, by, bw, bh) in spec_boxes + atks_boxes:
+            cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (0, 255, 255), 2)
+        for (bx, by, bw, bh) in digit_boxes:
+            cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (255, 255, 0), 2)
+        for planned in planned_clicks:
+            fx = planned.x - rx
+            fy = planned.y - ry
+            cv2.drawMarker(annotated, (int(fx), int(fy)), (255, 0, 255), markerType=cv2.MARKER_CROSS, markerSize=12, thickness=2)
+
+        ok, jpg = cv2.imencode(".jpg", annotated)
+        preview = jpg.tobytes() if ok else None
+
+        count = len(boxes)
+        if count:
+            status.total_detections += count
+
+        result = {
+            "found": count > 0,
+            "count": count,
+            "confidence": best_conf,
+            "method": method,
+            "boxes": boxes,
+            "attack": {
+                "found": bool(attack_boxes),
+                "count": len(attack_boxes),
+                "confidence": attack_conf,
+                "boxes": attack_boxes,
+                "word": status.attack_word,
+            },
+            "prepare": {
+                "found": bool(prepare_boxes),
+                "count": len(prepare_boxes),
+                "confidence": prepare_conf,
+                "boxes": prepare_boxes,
+            },
+            "special_attacks": {
+                "found": special_attacks_present,
+                "confidence": special_attacks_conf,
+                "special_boxes": spec_boxes,
+                "attacks_boxes": atks_boxes,
+            },
+            "weapon_1": {
+                "found": bool(digit_boxes),
+                "count": len(digit_boxes),
+                "confidence": digit_conf,
+                "boxes": digit_boxes,
+            },
+            "planned_clicks": [
+                {"x": planned.x, "y": planned.y, "label": planned.label}
+                for planned in planned_clicks
+            ],
+            "total_detections": status.total_detections,
+            "roi": roi_rect,
+            "state": self._state,
+        }
+
+        self._log_detection(count > 0, count, best_conf, method, attack_boxes, attack_conf, prepare_boxes, prepare_conf, special_attacks_present, special_attacks_conf, digit_boxes, digit_conf)
+        return result, preview
+
+    # ------------------------------------------------------------------
+    def _emit_detection_events(
+        self,
+        boxes,
+        best_conf,
+        attack_boxes,
+        attack_conf,
+        prepare_boxes,
+        prepare_conf,
+        special_attacks_present,
+        special_attacks_conf,
+        spec_boxes,
+        atks_boxes,
+        digit_boxes,
+        digit_conf,
+        roi_rect,
+    ) -> None:
+        if boxes:
+            self.runtime.emit_event("detect", "nameplate", roi_rect, boxes, best_conf, state=self._state)
+        if attack_boxes:
+            self.runtime.emit_event("detect", "attack_button", roi_rect, attack_boxes, attack_conf, state=self._state)
+        if prepare_boxes:
+            self.runtime.emit_event("detect", "prepare_header", roi_rect, prepare_boxes, prepare_conf, state=self._state)
+        if special_attacks_present:
+            combined = spec_boxes + atks_boxes
+            self.runtime.emit_event("confirm", "special_attacks", roi_rect, combined, special_attacks_conf, state=self._state)
+        if digit_boxes:
+            self.runtime.emit_event("detect", "weapon_slot_1", roi_rect, digit_boxes, digit_conf, state=self._state)
+
+    def _advance_state(
+        self,
+        boxes,
+        attack_boxes,
+        prepare_boxes,
+        digit_boxes,
+        special_attacks_present,
+        planned_clicks: List[PlannedClick],
+        roi_rect,
+    ) -> None:
+        runtime = self.runtime
+        click_tuples = [pc.to_tuple() for pc in planned_clicks]
+
+        if self._state == "Scan":
+            if boxes:
+                runtime.emit_click(click_tuples, "prime_nameplate", state=self._state)
+                self._transition("PrimeTarget")
+        elif self._state == "PrimeTarget":
+            if attack_boxes:
+                runtime.emit_click(click_tuples, "attack_button", state=self._state)
+                self._transition("AttackPanel")
+            elif not boxes:
+                self._transition("Scan")
+        elif self._state == "AttackPanel":
+            if prepare_boxes:
+                self._transition("Prepare")
+            elif not attack_boxes:
+                self._transition("Scan")
+        elif self._state == "Prepare":
+            if digit_boxes:
+                runtime.emit_click(click_tuples, "weapon_1", state=self._state)
+                self._transition("Weapon")
+            elif not prepare_boxes:
+                self._transition("Scan")
+        elif self._state == "Weapon":
+            if special_attacks_present:
+                self._transition("BattleLoop")
+            elif not digit_boxes:
+                self._transition("Scan")
+        elif self._state == "BattleLoop":
+            if special_attacks_present:
+                self._absent_counter = 0
+            else:
+                self._absent_counter += 1
+                if self._absent_counter >= 6:
+                    runtime.emit_event("transition", "battle_end", roi_rect, [], 0.0, state=self._state, notes="absent M=6 frames")
+                    self._transition("Scan")
+
+    def _transition(self, new_state: str) -> None:
+        prev = self._state
+        self._state = new_state
+        if new_state != "BattleLoop":
+            self._absent_counter = 0
+        self.runtime.set_state(new_state)
+        self.runtime.emit_event("transition", f"{prev}->{new_state}", [0, 0, 0, 0], [], 0.0, state=new_state)
+
+    def _log_detection(self, found: bool, count: int, best_conf: float, method: str, attack_boxes, attack_conf, prepare_boxes, prepare_conf, special_attacks_present: bool, special_attacks_conf: float, digit_boxes, digit_conf) -> None:
+        now = time.time()
+        if self._last_found is not found or now - self._last_log_ts > 2.0:
+            self.runtime.logger.info("detect | found=%s count=%d conf=%.3f method=%s", found, count, best_conf, method)
+            if attack_boxes:
+                self.runtime.logger.info("detect_attack | found=True count=%d conf=%.3f", len(attack_boxes), attack_conf)
+            if prepare_boxes:
+                self.runtime.logger.info("detect_prepare | found=True count=%d conf=%.3f", len(prepare_boxes), prepare_conf)
+            if special_attacks_present:
+                self.runtime.logger.info("detect_special_attacks | found=True conf=%.3f", special_attacks_conf)
+            if digit_boxes:
+                self.runtime.logger.info("detect_weapon_1 | found=True count=%d conf=%.3f", len(digit_boxes), digit_conf)
+            self._last_log_ts = now
+            self._last_found = found
+
+    @staticmethod
+    def _subroi(img: np.ndarray, rel: Tuple[float, float, float, float]) -> np.ndarray:
+        h, w = img.shape[:2]
+        rx, ry, rw, rh = rel
+        x = int(rx * w)
+        y = int(ry * h)
+        ww = int(rw * w)
+        hh = int(rh * h)
+        x = max(0, min(w - 1, x))
+        y = max(0, min(h - 1, y))
+        ww = max(1, min(w - x, ww))
+        hh = max(1, min(h - y, hh))
+        return img[y : y + hh, x : x + ww]
+
+    # Utilities -----------------------------------------------------------
+    @property
+    def state(self) -> str:
+        return self._state
+```
+
+## bsbot/runtime/service.py
+```python
+from __future__ import annotations
+
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Optional, Tuple, List, Dict, Any
+from datetime import datetime
+
+import os
+
+from bsbot.platform.win32 import window as win
+from bsbot.platform import capture
+from bsbot.core.logging import init_logging
+from bsbot.skills.base import FrameContext, SkillController
+from bsbot.skills.combat import CombatController
+
+
+@dataclass
+class DetectionStatus:
+    running: bool = False
+    paused: bool = False
+    last_result: dict = field(default_factory=dict)
+    last_frame: Optional[bytes] = None  # JPEG bytes for preview
+    template_path: Optional[str] = None
+    title: str = "Brighter Shores"
+    word: str = "Wendigo"
+    attack_word: str = "Attack"
+    tesseract_path: Optional[str] = None
+    method: str = "auto"  # auto, template, ocr
+    click_mode: str = "dry_run"  # dry_run, live
+    skill: str = "combat"
+    # Relative ROI (x,y,w,h) over the game client area.
+    # Use full window by default to cover the whole app screen.
+    roi: Tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
+    total_detections: int = 0
+
+
+class DetectorRuntime:
+    def __init__(self) -> None:
+        self.logger = init_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
+        self.status = DetectionStatus()
+        # pick up TESSERACT_PATH default if present
+        self.status.tesseract_path = os.environ.get("TESSERACT_PATH") or None
+        self._thread: Optional[threading.Thread] = None
+        self._stop_evt = threading.Event()
+        self._lock = threading.Lock()
+        # State/timeline
+        self._state = "Scan"
+        self._events: list[dict] = []
+        # Skill management
+        self._skills: Dict[str, SkillController] = {}
+        self._skill_name: str = "combat"
+        # Input helpers
+        self._active_hwnd: Optional[int] = None
+        self._last_live_click: dict[str, float] = {}
+        self._click_cooldown = 0.45
+        self._click_jitter_px = 5
+        self._click_move_duration = 0.16
+        self._click_down_delay = 0.05
+        self._register_default_skills()
+
+    def _register_default_skills(self) -> None:
+        self._skills["combat"] = CombatController(self)
+
+    def register_skill(self, name: str, controller: SkillController) -> None:
+        self._skills[name] = controller
+
+    def _set_skill(self, name: str) -> None:
+        if name not in self._skills:
+            raise ValueError(f"Unknown skill: {name}")
+        self._skill_name = name
+        self.status.skill = name
+
+    def _get_controller(self) -> SkillController:
+        return self._skills[self._skill_name]
+
+    def _current_params(self) -> Dict[str, Any]:
+        return {
+            "title": self.status.title,
+            "word": self.status.word,
+            "attack_word": self.status.attack_word,
+            "template_path": self.status.template_path,
+            "tesseract_path": self.status.tesseract_path,
+            "method": self.status.method,
+            "roi": self.status.roi,
+            "click_mode": self.status.click_mode,
+        }
+
+    def start(
+        self,
+        title: Optional[str] = None,
+        word: Optional[str] = None,
+        template_path: Optional[str] = None,
+        tesseract_path: Optional[str] = None,
+        method: Optional[str] = None,
+        attack_word: Optional[str] = None,
+        roi: Optional[Tuple[float, float, float, float]] = None,
+        click_mode: Optional[str] = None,
+        skill: Optional[str] = None,
+    ) -> None:
+        with self._lock:
+            if skill:
+                if self.status.running and skill != self._skill_name:
+                    raise ValueError("Cannot change skill while runtime is active")
+                self._set_skill(skill)
+            if self.status.running:
+                # Update parameters while running
+                if title: self.status.title = title
+                if word: self.status.word = word
+                if attack_word: self.status.attack_word = attack_word
+                if template_path: self.status.template_path = template_path
+                if tesseract_path: self.status.tesseract_path = tesseract_path
+                if method: self.status.method = method
+                if roi: self.status.roi = roi
+                if click_mode in {"dry_run", "live"}:
+                    self.status.click_mode = click_mode
+                self.status.paused = False
+                self.logger.info("Runtime updated | title=%s word=%s template=%s method=%s", self.status.title, self.status.word, self.status.template_path, self.status.method)
+                self._get_controller().on_update_params(self._current_params())
+                return
+            if title: self.status.title = title
+            if word: self.status.word = word
+            if attack_word: self.status.attack_word = attack_word
+            if method: self.status.method = method
+            if click_mode in {"dry_run", "live"}:
+                self.status.click_mode = click_mode
+            self.status.template_path = template_path
+            self.status.tesseract_path = tesseract_path
+            if roi: self.status.roi = roi
+            self.status.running = True
+            self.status.paused = False
+            self._stop_evt.clear()
+            self._last_live_click.clear()
+            self._get_controller().on_start(self._current_params())
+            self._thread = threading.Thread(target=self._run_loop, daemon=True)
+            self._thread.start()
+            self.logger.info("Runtime started | title=%s word=%s template=%s method=%s", self.status.title, self.status.word, self.status.template_path, self.status.method)
+
+    def pause(self) -> None:
+        with self._lock:
+            if self.status.running:
+                self.status.paused = True
+                self.logger.info("Runtime paused")
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stop_evt.set()
+            self.status.running = False
+            self.status.paused = False
+            try:
+                self._get_controller().on_stop()
+            except Exception:
+                self.logger.exception("skill on_stop failed")
+            self.logger.info("Runtime stopped")
+
+    def _run_loop(self) -> None:
+        win.make_dpi_aware()
+        while not self._stop_evt.is_set():
+            if self.status.paused:
+                time.sleep(0.1)
+                continue
+            try:
+                self._active_hwnd = None
+                hwnd = win.find_window_exact(self.status.title)
+                if not hwnd:
+                    msg = {"error": f"Window not found: {self.status.title}"}
+                    self._set_result(msg, frame=None)
+                    time.sleep(0.5)
+                    continue
+                x, y, w, h = win.get_client_rect(hwnd)
+                self._active_hwnd = hwnd
+                rx, ry, rw, rh = self._roi_pixels(x, y, w, h)
+                frame = capture.grab_rect(rx, ry, rw, rh)
+                controller = self._get_controller()
+                result, preview = controller.process_frame(
+                    frame,
+                    FrameContext(
+                        hwnd=hwnd,
+                        window_rect=(x, y, w, h),
+                        roi_origin=(rx, ry),
+                        roi_size=(rw, rh),
+                    ),
+                )
+                self._set_result(result, preview)
+            except Exception as e:
+                self._set_result({"error": str(e)}, frame=None)
+                self.logger.exception("runtime error")
+            time.sleep(0.3)
+
+    def _roi_pixels(self, x: int, y: int, w: int, h: int) -> Tuple[int, int, int, int]:
+        rx, ry, rw, rh = self.status.roi
+        return int(x + rx * w), int(y + ry * h), int(rw * w), int(rh * h)
+
+    def _set_result(self, result: dict, frame: Optional[bytes]) -> None:
+        with self._lock:
+            self.status.last_result = result
+            if frame is not None:
+                self.status.last_frame = frame
+
+    def snapshot(self) -> DetectionStatus:
+        with self._lock:
+            # Shallow copy is enough for read-only
+            return self.status
+
+    # Optional: expose recent event timeline (for future UI panel)
+    def get_timeline(self) -> list[dict]:
+        return list(self._events[-50:])
+
+    # Event helpers
+    def set_state(self, new_state: str) -> None:
+        self._state = new_state
+
+    def emit_click(self, planned: List[Tuple[int, int, str]], label: str, *, state: Optional[str] = None) -> None:
+        st = state or self._state
+        for entry in planned:
+            if len(entry) != 3:
+                continue
+            cx, cy, lbl = entry
+            if lbl == label:
+                if self.status.click_mode == "live":
+                    self._perform_live_click(int(cx), int(cy), label)
+                self.emit_event(
+                    "click",
+                    lbl,
+                    [0, 0, 0, 0],
+                    [],
+                    0.0,
+                    click={"x": int(cx), "y": int(cy), "mode": self.status.click_mode},
+                    state=st,
+                )
+                break
+
+    def emit_event(
+        self,
+        etype: str,
+        label: str,
+        roi: List[int],
+        boxes: List[Tuple[int, int, int, int]],
+        best_conf: float,
+        *,
+        click: Optional[Dict[str, Any]] = None,
+        notes: Optional[str] = None,
+        state: Optional[str] = None,
+    ) -> None:
+        st = state or self._state
+        evt = {
+            "ts": datetime.utcnow().isoformat(timespec="milliseconds") + "Z",
+            "state": st,
+            "type": etype,
+            "label": label,
+            "roi": roi,
+            "boxes": boxes,
+            "best_conf": float(best_conf),
+        }
+        if click:
+            evt["click"] = click
+        if notes:
+            evt["notes"] = notes
+        with self._lock:
+            self._events.append(evt)
+            if len(self._events) > 200:
+                self._events = self._events[-200:]
+        # Also mirror to file log in a compact form
+        self.logger.info("event | %s", evt)
+
+    def _perform_live_click(self, x: int, y: int, label: str) -> None:
+        now = time.time()
+        last = self._last_live_click.get(label, 0.0)
+        if now - last < self._click_cooldown:
+            self.logger.debug("click cooldown active | label=%s", label)
+            return
+        self._last_live_click[label] = now
+        try:
+            from bsbot.platform.input import human_click
+
+            human_click(
+                (x, y),
+                jitter_px=self._click_jitter_px,
+                move_duration=self._click_move_duration,
+                click_delay=self._click_down_delay,
+                hwnd=self._active_hwnd,
+            )
+        except Exception as exc:
+            self.logger.exception("live click failed | label=%s error=%s", label, exc)
+```
 
 ## bsbot/vision/detect.py
 ```python
@@ -335,407 +963,6 @@ def derive_hitbox_from_word(word_bbox: Tuple[int, int, int, int]) -> Tuple[int, 
     hw = int(0.9 * w)
     hh = int(0.7 * h)
     return int(cx - hw // 2), int(hy - hh // 2), hw, hh
-```
-
-## bsbot/runtime/service.py
-```python
-from __future__ import annotations
-
-import threading
-import time
-from dataclasses import dataclass, field
-from typing import Optional, Tuple, List, Dict, Any
-from datetime import datetime
-
-import cv2
-import os
-
-from bsbot.platform.win32 import window as win
-from bsbot.platform import capture
-from bsbot.vision.detect import detect_word_ocr, detect_with_template, configure_tesseract
-from bsbot.core.logging import init_logging
-
-
-@dataclass
-class DetectionStatus:
-    running: bool = False
-    paused: bool = False
-    last_result: dict = field(default_factory=dict)
-    last_frame: Optional[bytes] = None  # JPEG bytes for preview
-    template_path: Optional[str] = None
-    title: str = "Brighter Shores"
-    word: str = "Wendigo"
-    attack_word: str = "Attack"
-    tesseract_path: Optional[str] = None
-    method: str = "auto"  # auto, template, ocr
-    # Relative ROI (x,y,w,h) over the game client area.
-    # Use full window by default to cover the whole app screen.
-    roi: Tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
-    total_detections: int = 0
-
-
-class DetectorRuntime:
-    def __init__(self) -> None:
-        self.logger = init_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
-        self.status = DetectionStatus()
-        # pick up TESSERACT_PATH default if present
-        self.status.tesseract_path = os.environ.get("TESSERACT_PATH") or None
-        self._thread: Optional[threading.Thread] = None
-        self._stop_evt = threading.Event()
-        self._lock = threading.Lock()
-        # FSM and event timeline (dry-run only for now)
-        self._state = "Scan"
-        self._last_signals = {"attack": False, "prepare": False, "special_attacks": False}
-        self._absent_counter = 0
-        self._events: list[dict] = []
-
-    def start(self, title: Optional[str] = None, word: Optional[str] = None, template_path: Optional[str] = None, tesseract_path: Optional[str] = None, method: Optional[str] = None, attack_word: Optional[str] = None, roi: Optional[Tuple[float, float, float, float]] = None) -> None:
-        with self._lock:
-            if self.status.running:
-                # Update parameters while running
-                if title: self.status.title = title
-                if word: self.status.word = word
-                if attack_word: self.status.attack_word = attack_word
-                if template_path: self.status.template_path = template_path
-                if tesseract_path: self.status.tesseract_path = tesseract_path
-                if method: self.status.method = method
-                if roi: self.status.roi = roi
-                self.status.paused = False
-                self.logger.info("Runtime updated | title=%s word=%s template=%s method=%s", self.status.title, self.status.word, self.status.template_path, self.status.method)
-                return
-            if title: self.status.title = title
-            if word: self.status.word = word
-            if attack_word: self.status.attack_word = attack_word
-            if method: self.status.method = method
-            self.status.template_path = template_path
-            self.status.tesseract_path = tesseract_path
-            if roi: self.status.roi = roi
-            self.status.running = True
-            self.status.paused = False
-            self._stop_evt.clear()
-            self._thread = threading.Thread(target=self._run_loop, daemon=True)
-            self._thread.start()
-            self.logger.info("Runtime started | title=%s word=%s template=%s method=%s", self.status.title, self.status.word, self.status.template_path, self.status.method)
-
-    def pause(self) -> None:
-        with self._lock:
-            if self.status.running:
-                self.status.paused = True
-                self.logger.info("Runtime paused")
-
-    def stop(self) -> None:
-        with self._lock:
-            self._stop_evt.set()
-            self.status.running = False
-            self.status.paused = False
-            self.logger.info("Runtime stopped")
-
-    def _run_loop(self) -> None:
-        win.make_dpi_aware()
-        # Configure tesseract once per loop if using OCR
-        if not self.status.template_path:
-            configure_tesseract(self.status.tesseract_path)
-        last_log_t = 0.0
-        last_found = None
-        while not self._stop_evt.is_set():
-            if self.status.paused:
-                time.sleep(0.1)
-                continue
-            try:
-                hwnd = win.find_window_exact(self.status.title)
-                if not hwnd:
-                    msg = {"error": f"Window not found: {self.status.title}"}
-                    self._set_result(msg, frame=None)
-                    now = time.time()
-                    if now - last_log_t > 2.0:
-                        self.logger.warning("%s", msg["error"]) 
-                        last_log_t = now
-                    time.sleep(0.5)
-                    continue
-                x, y, w, h = win.get_client_rect(hwnd)
-                rx, ry, rw, rh = self._roi_pixels(x, y, w, h)
-                frame = capture.grab_rect(rx, ry, rw, rh)
-                boxes = []
-                best_conf = 0.0
-                method = self.status.method
-
-                # Honor method selection
-                if method in ["auto", "template"]:
-                    # Try template detection
-                    if self.status.template_path:
-                        tpl = cv2.imread(self.status.template_path, cv2.IMREAD_COLOR)
-                        if tpl is not None:
-                            from bsbot.vision.detect import detect_template_multi
-                            boxes, scores = detect_template_multi(frame, tpl)
-                            best_conf = max(scores) if scores else 0.0
-                            if method == "template":
-                                method = "template"
-                            else:
-                                method = "template" if boxes else "ocr_fallback"
-
-                if not boxes and method in ["auto", "ocr"]:
-                    # Try OCR detection
-                    from bsbot.vision.detect import detect_word_ocr_multi
-                    boxes, best_conf = detect_word_ocr_multi(frame, target=self.status.word)
-                    if method == "ocr":
-                        method = "ocr"
-                    elif method == "auto":
-                        method = "ocr_fallback"
-
-                # Parallel OCR for the action button (e.g., "Attack") using the same frame
-                from bsbot.vision.detect import detect_word_ocr_multi as _detect_multi
-                attack_boxes, attack_conf = _detect_multi(frame, target=self.status.attack_word)
-
-                # Additional OCR signals in specific HUD regions
-                name_roi = self._subroi(frame, (0.20, 0.25, 0.60, 0.50))
-                # Attack panel and Prepare panel regions inside the frame
-                apx, apy, apw, aph = int(0.55 * rw), int(0.20 * rh), int(0.40 * rw), int(0.60 * rh)
-                ppx, ppy, ppw, pph = int(0.55 * rw), int(0.07 * rh), int(0.43 * rw), int(0.86 * rh)
-                bbx, bby, bbw, bbh = int(0.10 * rw), int(0.83 * rh), int(0.80 * rw), int(0.15 * rh)
-                attack_panel_roi = frame[apy:apy+aph, apx:apx+apw]
-                prepare_panel_roi = frame[ppy:ppy+pph, ppx:ppx+ppw]
-                bottom_bar_roi = frame[bby:bby+bbh, bbx:bbx+bbw]
-
-                # Prepare header detection (either PREPARE or CHOOSE words)
-                prep_boxes1, prep_conf1 = _detect_multi(prepare_panel_roi, target="prepare")
-                prep_boxes2, prep_conf2 = _detect_multi(prepare_panel_roi, target="choose")
-                # Adjust prepare boxes to frame coordinates
-                prepare_boxes = [(ppx + bx, ppy + by, bw, bh) for (bx, by, bw, bh) in prep_boxes1 + prep_boxes2]
-                prepare_conf = max(prep_conf1, prep_conf2)
-
-                # Bottom bar combat HUD: require both SPECIAL and ATTACKS present
-                spec_boxes_local, spec_conf = _detect_multi(bottom_bar_roi, target="special")
-                atks_boxes_local, atks_conf = _detect_multi(bottom_bar_roi, target="attacks")
-                spec_boxes = [(bbx + bx, bby + by, bw, bh) for (bx, by, bw, bh) in spec_boxes_local]
-                atks_boxes = [(bbx + bx, bby + by, bw, bh) for (bx, by, bw, bh) in atks_boxes_local]
-                special_attacks_present = bool(spec_boxes and atks_boxes)
-                special_attacks_conf = min(spec_conf, atks_conf) if special_attacks_present else 0.0
-
-                # Weapon digit '1' within prepare panel lower half
-                from bsbot.vision.detect import detect_digits_ocr_multi
-                weapons_roi = self._subroi(prepare_panel_roi, (0.0, 0.50, 1.0, 0.50))
-                digit_boxes_local, digit_conf = detect_digits_ocr_multi(weapons_roi, targets=("1",))
-                # Offset digit boxes into frame coordinates
-                wpx = ppx + 0
-                wpy = ppy + int(0.50 * pph)
-                digit_boxes = [(wpx + bx, wpy + by, bw, bh) for (bx, by, bw, bh) in digit_boxes_local]
-
-                # Compute dry-run click points when available
-                planned_clicks: List[Tuple[int,int,str]] = []  # list of (x,y,label)
-                # Nameplate follow-up: click below the nameplate center
-                if boxes:
-                    bx, by, bw, bh = boxes[0]
-                    cx = rx + bx + bw // 2
-                    cy = ry + by + int(1.4 * bh)
-                    planned_clicks.append((cx, cy, "prime_nameplate"))
-                # Attack button center
-                if attack_boxes:
-                    bx, by, bw, bh = attack_boxes[0]
-                    cx = rx + bx + bw // 2
-                    cy = ry + by + bh // 2
-                    planned_clicks.append((cx, cy, "attack_button"))
-                # Weapon 1 digit center (map from weapons_roi to full frame coords)
-                if digit_boxes:
-                    bx, by, bw, bh = digit_boxes[0]
-                    cx = rx + bx + bw // 2
-                    cy = ry + by + bh // 2
-                    planned_clicks.append((cx, cy, "weapon_1"))
-
-                # FSM transitions (dry-run only)
-                # Emit detection events (one per category when present)
-                if boxes:
-                    self._emit_event("detect", "nameplate", [rx, ry, rw, rh], boxes, best_conf)
-                if attack_boxes:
-                    self._emit_event("detect", "attack_button", [rx, ry, rw, rh], attack_boxes, attack_conf)
-                if prepare_boxes:
-                    self._emit_event("detect", "prepare_header", [rx, ry, rw, rh], prepare_boxes, prepare_conf)
-                if special_attacks_present:
-                    self._emit_event("confirm", "special_attacks", [rx, ry, rw, rh], spec_boxes + atks_boxes, special_attacks_conf)
-                if digit_boxes:
-                    self._emit_event("detect", "weapon_slot_1", [rx, ry, rw, rh], digit_boxes, digit_conf)
-
-                # State logic
-                prev_state = self._state
-                if self._state == "Scan":
-                    if boxes:
-                        self._emit_click(planned_clicks, label="prime_nameplate")
-                        self._transition("PrimeTarget")
-                elif self._state == "PrimeTarget":
-                    if attack_boxes:
-                        self._emit_click(planned_clicks, label="attack_button")
-                        self._transition("AttackPanel")
-                    elif not boxes:
-                        self._transition("Scan")
-                elif self._state == "AttackPanel":
-                    if prepare_boxes:
-                        self._transition("Prepare")
-                    elif not attack_boxes:
-                        self._transition("Scan")
-                elif self._state == "Prepare":
-                    if digit_boxes:
-                        self._emit_click(planned_clicks, label="weapon_1")
-                        self._transition("Weapon")
-                    elif not prepare_boxes:
-                        self._transition("Scan")
-                elif self._state == "Weapon":
-                    if special_attacks_present:
-                        self._transition("BattleLoop")
-                    elif not digit_boxes:
-                        # If we lose digit before entering battle, restart
-                        self._transition("Scan")
-                elif self._state == "BattleLoop":
-                    if special_attacks_present:
-                        self._absent_counter = 0
-                    else:
-                        self._absent_counter += 1
-                        if self._absent_counter >= 6:  # M frames absence
-                            self._emit_event("transition", "battle_end", [rx, ry, rw, rh], [], 0.0, notes="absent M=6 frames")
-                            self._transition("Scan")
-
-                annotated = frame.copy()
-                # Main target boxes (red)
-                for (bx, by, bw, bh) in boxes:
-                    cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (0, 0, 255), 2)
-                # Attack boxes (green)
-                for (bx, by, bw, bh) in attack_boxes:
-                    cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
-                # Prepare header (blue)
-                for (bx, by, bw, bh) in prepare_boxes:
-                    cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (255, 0, 0), 2)
-                # Bottom bar tokens (yellow)
-                for (bx, by, bw, bh) in spec_boxes + atks_boxes:
-                    cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (0, 255, 255), 2)
-                # Digit 1 (cyan)
-                for (bx, by, bw, bh) in digit_boxes:
-                    cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (255, 255, 0), 2)
-                # Planned clicks (magenta crosshairs)
-                for (cx, cy, lbl) in planned_clicks:
-                    # Draw small cross at (cx,cy) in annotated's coordinate space (relative to frame origin)
-                    fx = cx - rx; fy = cy - ry
-                    cv2.drawMarker(annotated, (int(fx), int(fy)), (255, 0, 255), markerType=cv2.MARKER_CROSS, markerSize=12, thickness=2)
-                ok, jpg = cv2.imencode('.jpg', annotated)
-                preview = jpg.tobytes() if ok else None
-
-                count = len(boxes)
-                if count:
-                    self.status.total_detections += count
-
-                result = {
-                    "found": count > 0,
-                    "count": count,
-                    "confidence": best_conf,
-                    "method": method,
-                    "boxes": boxes,
-                    "attack": {
-                        "found": len(attack_boxes) > 0,
-                        "count": len(attack_boxes),
-                        "confidence": attack_conf,
-                        "boxes": attack_boxes,
-                        "word": self.status.attack_word,
-                    },
-                    "prepare": {
-                        "found": len(prepare_boxes) > 0,
-                        "count": len(prepare_boxes),
-                        "confidence": prepare_conf,
-                        "boxes": prepare_boxes,
-                    },
-                    "special_attacks": {
-                        "found": special_attacks_present,
-                        "confidence": special_attacks_conf,
-                        "special_boxes": spec_boxes,
-                        "attacks_boxes": atks_boxes,
-                    },
-                    "weapon_1": {
-                        "found": len(digit_boxes) > 0,
-                        "count": len(digit_boxes),
-                        "confidence": digit_conf,
-                        "boxes": digit_boxes,
-                    },
-                    "planned_clicks": [{"x": int(cx), "y": int(cy), "label": lbl} for (cx, cy, lbl) in planned_clicks],
-                    "total_detections": self.status.total_detections,
-                    "roi": [rx, ry, rw, rh],
-                    "state": self._state,
-                }
-                self._set_result(result, preview)
-
-                now = time.time()
-                if last_found is not (count > 0) or now - last_log_t > 2.0:
-                    self.logger.info("detect | found=%s count=%d conf=%.3f method=%s", count > 0, count, best_conf, method)
-                    # Only log attack signal when present to avoid noise
-                    if attack_boxes:
-                        self.logger.info("detect_attack | found=True count=%d conf=%.3f", len(attack_boxes), attack_conf)
-                    if prepare_boxes:
-                        self.logger.info("detect_prepare | found=True count=%d conf=%.3f", len(prepare_boxes), prepare_conf)
-                    if special_attacks_present:
-                        self.logger.info("detect_special_attacks | found=True conf=%.3f", special_attacks_conf)
-                    if digit_boxes:
-                        self.logger.info("detect_weapon_1 | found=True count=%d conf=%.3f", len(digit_boxes), digit_conf)
-                    last_log_t = now
-                    last_found = count > 0
-            except Exception as e:
-                self._set_result({"error": str(e)}, frame=None)
-                self.logger.exception("runtime error")
-            time.sleep(0.3)
-
-    def _roi_pixels(self, x: int, y: int, w: int, h: int) -> Tuple[int, int, int, int]:
-        rx, ry, rw, rh = self.status.roi
-        return int(x + rx * w), int(y + ry * h), int(rw * w), int(rh * h)
-
-    def _subroi(self, img: 'np.ndarray', rel: Tuple[float, float, float, float]):
-        import numpy as _np
-        h, w = img.shape[:2]
-        rx, ry, rw, rh = rel
-        x = int(rx * w); y = int(ry * h); ww = int(rw * w); hh = int(rh * h)
-        x = max(0, min(w - 1, x)); y = max(0, min(h - 1, y))
-        ww = max(1, min(w - x, ww)); hh = max(1, min(h - y, hh))
-        return img[y:y+hh, x:x+ww]
-
-    def _set_result(self, result: dict, frame: Optional[bytes]) -> None:
-        with self._lock:
-            self.status.last_result = result
-            if frame is not None:
-                self.status.last_frame = frame
-
-    def snapshot(self) -> DetectionStatus:
-        with self._lock:
-            # Shallow copy is enough for read-only
-            return self.status
-
-    # Optional: expose recent event timeline (for future UI panel)
-    def get_timeline(self) -> list[dict]:
-        return list(self._events[-50:])
-
-    # Event helpers
-    def _transition(self, new_state: str) -> None:
-        self._emit_event("transition", f"{self._state}->" + new_state, [0,0,0,0], [], 0.0)
-        self._state = new_state
-
-    def _emit_click(self, planned: List[Tuple[int,int,str]], label: str) -> None:
-        for (cx, cy, lbl) in planned:
-            if lbl == label:
-                self._emit_event("click", lbl, [0,0,0,0], [], 0.0, click={"x": int(cx), "y": int(cy), "mode": "dry_run"})
-                break
-
-    def _emit_event(self, etype: str, label: str, roi: List[int], boxes: List[Tuple[int,int,int,int]], best_conf: float, click: Optional[Dict[str, Any]] = None, notes: Optional[str] = None) -> None:
-        evt = {
-            "ts": datetime.utcnow().isoformat(timespec="milliseconds") + "Z",
-            "state": self._state,
-            "type": etype,
-            "label": label,
-            "roi": roi,
-            "boxes": boxes,
-            "best_conf": float(best_conf),
-        }
-        if click:
-            evt["click"] = click
-        if notes:
-            evt["notes"] = notes
-        with self._lock:
-            self._events.append(evt)
-            if len(self._events) > 200:
-                self._events = self._events[-200:]
-        # Also mirror to file log in a compact form
-        self.logger.info("event | %s", evt)
 ```
 
 ## config/elements/monsters.yml
