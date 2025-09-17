@@ -38,7 +38,16 @@ def create_app() -> Flask:
         template = data.get("template") or None
         tess = data.get("tesseract_path") or None
         method = data.get("method") or "auto"
-        rt.start(title=title, word=word, template_path=template, tesseract_path=tess, method=method)
+        attack_word = data.get("attack_word") or None
+        roi = data.get("roi") or None
+        if isinstance(roi, list) and len(roi) == 4:
+            try:
+                roi = tuple(float(v) for v in roi)  # type: ignore
+            except Exception:
+                roi = None
+        else:
+            roi = None
+        rt.start(title=title, word=word, template_path=template, tesseract_path=tess, method=method, attack_word=attack_word, roi=roi)
         logger.info("api/start | title=%s word=%s template=%s method=%s", title, word, template, method)
         return jsonify({"ok": True})
 
@@ -117,6 +126,13 @@ def create_app() -> Flask:
             "flask": flask.__version__,
             "tesseract": tver,
         })
+
+    @app.get("/api/timeline")
+    def api_timeline():
+        try:
+            return jsonify(rt.get_timeline())
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
     return app
 

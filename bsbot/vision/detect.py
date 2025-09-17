@@ -65,108 +65,119 @@ def configure_tesseract(explicit_path: Optional[str] = None) -> None:
 
 
 def detect_word_ocr(bgr: np.ndarray, target: str = "wendigo") -> Detection:
+    """OCR-based single best match for ``target``.
+
+    Tries a red-text focused pass first (for enemy nameplates),
+    then falls back to a general grayscale OCR pass to support
+    non-red UI elements like the "Attack" button.
+    """
     # Ensure tesseract is configured; no-op if already set
     configure_tesseract()
-    mask = _red_mask(bgr)
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    masked = cv2.bitwise_and(gray, gray, mask=mask)
-    # Slight upscale helps OCR on small UI fonts
-    scale = 1.5
-    resized = cv2.resize(masked, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-    cfg = "--psm 6 -l eng -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-    try:
-        data = pytesseract.image_to_data(resized, config=cfg, output_type=pytesseract.Output.DICT)
-    except Exception:
-        return Detection(False, method="ocr")
 
-    best_det = Detection(False, method="ocr")
-    n = len(data.get("text", []))
-    for i in range(n):
-        text = (data["text"][i] or "").strip().lower()
-        if not text:
-            continue
-        # Safe conf extraction
-        conf_list = data.get("conf", [])
-        conf_str = conf_list[i] if i < len(conf_list) else "0"
+    def _run_ocr(gray_like: np.ndarray, scale: float = 1.5) -> Detection:
+        resized = cv2.resize(gray_like, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        cfg = "--psm 6 -l eng -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
         try:
-            conf_val = float(conf_str)
+            data = pytesseract.image_to_data(resized, config=cfg, output_type=pytesseract.Output.DICT)
         except Exception:
-            conf_val = 0.0
-        # Some tesseract builds use -1 for non-words
-        if conf_val < 0:
-            conf_val = 0.0
+            return Detection(False, method="ocr")
+        best_det = Detection(False, method="ocr")
+        n = len(data.get("text", []))
+        for i in range(n):
+            text = (data["text"][i] or "").strip().lower()
+            if not text:
+                continue
+            conf_list = data.get("conf", [])
+            conf_str = conf_list[i] if i < len(conf_list) else "0"
+            try:
+                conf_val = float(conf_str)
+            except Exception:
+                conf_val = 0.0
+            if conf_val < 0:
+                conf_val = 0.0
+            lefts = data.get("left", []); tops = data.get("top", []);
+            widths = data.get("width", []); heights = data.get("height", [])
+            if i >= len(lefts) or i >= len(tops) or i >= len(widths) or i >= len(heights):
+                continue
+            x = int(lefts[i] / scale)
+            y = int(tops[i] / scale)
+            w = int(widths[i] / scale)
+            h = int(heights[i] / scale)
+            if text == target.lower():
+                return Detection(True, (x, y, w, h), conf_val / 100.0, "ocr")
+            if target.lower() in text:
+                best_det = Detection(True, (x, y, w, h), conf_val / 100.0, "ocr_partial")
+        return best_det
 
-        # Safe bbox extraction
-        lefts = data.get("left", [])
-        tops = data.get("top", [])
-        widths = data.get("width", [])
-        heights = data.get("height", [])
-        if i >= len(lefts) or i >= len(tops) or i >= len(widths) or i >= len(heights):
-            continue
-        x = int(lefts[i] / scale)
-        y = int(tops[i] / scale)
-        w = int(widths[i] / scale)
-        h = int(heights[i] / scale)
-
-        if text == target.lower():
-            return Detection(True, (x, y, w, h), conf_val / 100.0, "ocr")
-        # Allow near match: contains or high overlap with target substring
-        if target.lower() in text:
-            best_det = Detection(True, (x, y, w, h), conf_val / 100.0, "ocr_partial")
-    return best_det
+    # Pass 1: red mask (enemy nameplates like "Wendigo")
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    red_mask = _red_mask(bgr)
+    masked = cv2.bitwise_and(gray, gray, mask=red_mask)
+    det = _run_ocr(masked)
+    if det.found:
+        return det
+    # Pass 2: general grayscale (white-on-dark UI like "Attack")
+    return _run_ocr(gray)
 
 
 def detect_word_ocr_multi(bgr: np.ndarray, target: str = "wendigo") -> Tuple[List[Tuple[int,int,int,int]], float]:
-    """Return filtered boxes that match the target word via OCR with deduplication."""
-    mask = _red_mask(bgr)
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    masked = cv2.bitwise_and(gray, gray, mask=mask)
-    scale = 1.5
-    resized = cv2.resize(masked, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-    cfg = "--psm 6 -l eng -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-    raw_boxes: List[Tuple[int,int,int,int]] = []
-    scores: List[float] = []
+    """Return filtered boxes that match ``target`` via OCR with deduplication.
 
-    try:
-        data = pytesseract.image_to_data(resized, config=cfg, output_type=pytesseract.Output.DICT)
-    except Exception:
-        return [], 0.0
-
-    n = len(data.get("text", []))
-    for i in range(n):
-        text = (data["text"][i] or "").strip().lower()
-        if not text:
-            continue
-
-        conf_list = data.get("conf", [])
-        conf_str = conf_list[i] if i < len(conf_list) else "0"
+    Uses a two-pass strategy: red-mask first, then general grayscale fallback.
+    This enables detecting both red enemy nameplates (e.g., "Wendigo") and
+    white-on-dark UI text (e.g., "Attack").
+    """
+    def _collect_from(gray_like: np.ndarray, scale: float = 1.5) -> Tuple[List[Tuple[int,int,int,int]], List[float]]:
+        cfg = "--psm 6 -l eng -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        resized = cv2.resize(gray_like, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         try:
-            conf_val = float(conf_str)
+            data = pytesseract.image_to_data(resized, config=cfg, output_type=pytesseract.Output.DICT)
         except Exception:
-            conf_val = 0.0
+            return [], []
+        boxes: List[Tuple[int,int,int,int]] = []
+        scores: List[float] = []
+        n = len(data.get("text", []))
+        for i in range(n):
+            text = (data["text"][i] or "").strip().lower()
+            if not text:
+                continue
+            conf_list = data.get("conf", [])
+            conf_str = conf_list[i] if i < len(conf_list) else "0"
+            try:
+                conf_val = float(conf_str)
+            except Exception:
+                conf_val = 0.0
+            if conf_val < 0:
+                conf_val = 0.0
+            lefts = data.get("left", []); tops = data.get("top", []);
+            widths = data.get("width", []); heights = data.get("height", [])
+            if i >= len(lefts) or i >= len(tops) or i >= len(widths) or i >= len(heights):
+                continue
+            x = int(lefts[i] / scale)
+            y = int(tops[i] / scale)
+            w = int(widths[i] / scale)
+            h = int(heights[i] / scale)
+            if not _is_valid_text_box(w, h):
+                continue
+            if text == target.lower() or target.lower() in text:
+                boxes.append((x, y, w, h))
+                scores.append(conf_val / 100.0)
+        return boxes, scores
 
-        if conf_val < 0:
-            conf_val = 0.0
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    # Pass 1: red mask
+    red_mask = _red_mask(bgr)
+    masked = cv2.bitwise_and(gray, gray, mask=red_mask)
+    raw_boxes1, scores1 = _collect_from(masked)
 
-        lefts = data.get("left", []); tops = data.get("top", []);
-        widths = data.get("width", []); heights = data.get("height", [])
-        if i >= len(lefts) or i >= len(tops) or i >= len(widths) or i >= len(heights):
-            continue
+    # If nothing found, pass 2: general grayscale (captures white text like "Attack")
+    raw_boxes2, scores2 = ([], [])
+    if not raw_boxes1:
+        raw_boxes2, scores2 = _collect_from(gray)
 
-        x = int(lefts[i] / scale)
-        y = int(tops[i] / scale)
-        w = int(widths[i] / scale)
-        h = int(heights[i] / scale)
+    raw_boxes = raw_boxes1 + raw_boxes2
+    scores = scores1 + scores2
 
-        # Apply size and aspect ratio filters to reduce noise
-        if not _is_valid_text_box(w, h):
-            continue
-
-        if text == target.lower() or target.lower() in text:
-            raw_boxes.append((x, y, w, h))
-            scores.append(conf_val / 100.0)
-
-    # Apply NMS to remove overlapping detections
     if raw_boxes and scores:
         keep_indices = _nms(raw_boxes, scores, iou_thresh=0.5)
         filtered_boxes = [raw_boxes[i] for i in keep_indices]
@@ -238,6 +249,63 @@ def detect_template_multi(bgr: np.ndarray, template_bgr: np.ndarray, threshold: 
     boxes = [boxes[i] for i in keep][:max_instances]
     scores = [scores[i] for i in keep][:max_instances]
     return boxes, scores
+
+
+def detect_digits_ocr_multi(bgr: np.ndarray, targets: List[str] | Tuple[str, ...] = ("1",)) -> Tuple[List[Tuple[int,int,int,int]], float]:
+    """Detect one or more digit tokens via OCR within a region.
+
+    - Restricts OCR to digits for better precision.
+    - Returns deduplicated boxes and best confidence.
+    """
+    configure_tesseract()
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    scale = 1.5
+    resized = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    cfg = "--psm 6 -l eng -c tessedit_char_whitelist=0123456789"
+    try:
+        data = pytesseract.image_to_data(resized, config=cfg, output_type=pytesseract.Output.DICT)
+    except Exception:
+        return [], 0.0
+
+    targets_lc = {t.lower() for t in targets}
+    raw_boxes: List[Tuple[int,int,int,int]] = []
+    scores: List[float] = []
+    n = len(data.get("text", []))
+    for i in range(n):
+        text = (data["text"][i] or "").strip().lower()
+        if not text:
+            continue
+        if text not in targets_lc:
+            continue
+        conf_list = data.get("conf", [])
+        conf_str = conf_list[i] if i < len(conf_list) else "0"
+        try:
+            conf_val = float(conf_str)
+        except Exception:
+            conf_val = 0.0
+        if conf_val < 0:
+            conf_val = 0.0
+        lefts = data.get("left", []); tops = data.get("top", []);
+        widths = data.get("width", []); heights = data.get("height", [])
+        if i >= len(lefts) or i >= len(tops) or i >= len(widths) or i >= len(heights):
+            continue
+        x = int(lefts[i] / scale)
+        y = int(tops[i] / scale)
+        w = int(widths[i] / scale)
+        h = int(heights[i] / scale)
+        if not _is_valid_text_box(w, h):
+            continue
+        raw_boxes.append((x, y, w, h))
+        scores.append(conf_val / 100.0)
+
+    if raw_boxes and scores:
+        keep_indices = _nms(raw_boxes, scores, iou_thresh=0.5)
+        filtered_boxes = [raw_boxes[i] for i in keep_indices]
+        filtered_scores = [scores[i] for i in keep_indices]
+        best_conf = max(filtered_scores) if filtered_scores else 0.0
+        return filtered_boxes, best_conf
+
+    return [], 0.0
 
 
 def detect_with_template(bgr: np.ndarray, template_bgr: np.ndarray, threshold: float = 0.78) -> Detection:
