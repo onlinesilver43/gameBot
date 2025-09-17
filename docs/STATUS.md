@@ -64,10 +64,16 @@ scripts\serve.ps1 -Port 8083 -LogLevel INFO
 
 ## Next Phase Readiness (R1)
 **Ready for Codex assignment of R1 tasks:**
-- R1-1: Combat dry-run click simulator
-- R1-2: Input driver (safe)
-- R1-3: Combat engage loop
-- R1-4: Loot pickup automation
+- R1-A: OCR detectors (nameplate/Attack/Prepare/Weapon1/SPECIAL ATTACKS)
+- R1-B: Click targets + dry-run overlay (no real inputs)
+- R1-C: State machine with timeouts/retries; BattleLoop using SPECIAL ATTACKS sentinel
+- R1-D: Event timeline API + UI panel (last 50 events)
+- R1-E: Real inputs toggle with focus guard & safety cooldowns
+
+Acceptance (R1 OCR-only)
+- 10 engagements ≥80% reach BattleLoop after weapon 1 click
+- <5% false clicks; clean recovery to Scan on timeouts
+- Avg time nameplate→BattleLoop <3.0 s
 
 ## Final Status
 **GROC5 Implementation Phase: COMPLETE ✅**

@@ -240,6 +240,41 @@ def detect_template_multi(bgr: np.ndarray, template_bgr: np.ndarray, threshold: 
     return boxes, scores
 
 
+def detect_template_pyramid(
+    bgr: np.ndarray,
+    template_bgr: np.ndarray,
+    scales: List[float],
+    threshold: float = 0.7,
+) -> Tuple[List[Tuple[int, int, int, int]], List[float]]:
+    """Template match across multiple scales; returns merged boxes + scores (after NMS)."""
+    all_boxes: List[Tuple[int, int, int, int]] = []
+    all_scores: List[float] = []
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 80, 160)
+    for s in scales:
+        if s == 1.0:
+            tpl = template_bgr
+        else:
+            tpl = cv2.resize(template_bgr, None, fx=s, fy=s, interpolation=cv2.INTER_AREA if s < 1.0 else cv2.INTER_CUBIC)
+        tpl_gray = cv2.cvtColor(tpl, cv2.COLOR_BGR2GRAY)
+        tpl_edges = cv2.Canny(tpl_gray, 80, 160)
+        if edges.shape[0] < tpl_edges.shape[0] or edges.shape[1] < tpl_edges.shape[1]:
+            continue
+        res = cv2.matchTemplate(edges, tpl_edges, cv2.TM_CCOEFF_NORMED)
+        ys, xs = np.where(res >= threshold)
+        h, w = tpl_edges.shape[:2]
+        for y, x in zip(ys, xs):
+            all_boxes.append((int(x), int(y), int(w), int(h)))
+            all_scores.append(float(res[y, x]))
+
+    if not all_boxes:
+        return [], []
+    keep = _nms(all_boxes, all_scores, iou_thresh=0.5)
+    boxes = [all_boxes[i] for i in keep]
+    scores = [all_scores[i] for i in keep]
+    return boxes, scores
+
+
 def detect_with_template(bgr: np.ndarray, template_bgr: np.ndarray, threshold: float = 0.78) -> Detection:
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     tpl_gray = cv2.cvtColor(template_bgr, cv2.COLOR_BGR2GRAY)
@@ -261,3 +296,190 @@ def derive_hitbox_from_word(word_bbox: Tuple[int, int, int, int]) -> Tuple[int, 
     hw = int(0.9 * w)
     hh = int(0.7 * h)
     return int(cx - hw // 2), int(hy - hh // 2), hw, hh
+
+
+def detect_attack_button_boxes(bgr: np.ndarray) -> List[Tuple[int, int, int, int]]:
+    """Find 'Attack' word boxes in the right-side overlay using OCR with strong preprocessing.
+
+    This routine is tuned for the white 'Attack' text on a red rounded button.
+    """
+    # 1) Increase contrast with CLAHE
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    try:
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray = clahe.apply(gray)
+    except Exception:
+        pass
+    # 2) Otsu threshold to make text crisp
+    _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # 3) Small dilation to connect strokes
+    th = cv2.medianBlur(th, 3)
+
+    cfg = "--psm 7 -l eng -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    try:
+        data = pytesseract.image_to_data(th, config=cfg, output_type=pytesseract.Output.DICT)
+    except Exception:
+        return []
+    boxes: List[Tuple[int, int, int, int]] = []
+    n = len(data.get("text", []))
+    for i in range(n):
+        t = (data["text"][i] or "").strip().lower()
+        if t != "attack":
+            continue
+        lefts = data.get("left", [])
+        tops = data.get("top", [])
+        widths = data.get("width", [])
+        heights = data.get("height", [])
+        if i >= len(lefts) or i >= len(tops) or i >= len(widths) or i >= len(heights):
+            continue
+        x, y, w, h = int(lefts[i]), int(tops[i]), int(widths[i]), int(heights[i])
+        # Filter tiny boxes
+        if w < 12 or h < 10:
+            continue
+        boxes.append((x, y, w, h))
+    return boxes
+
+
+def find_leftmost_count_marker(bgr: np.ndarray) -> Optional[Tuple[int, int]]:
+    """Find the leftmost 'xN' style count marker near the bottom of the prepare panel.
+
+    Returns center (cx, cy) in ROI coordinates, or None.
+    OCR-only heuristic: looks for tokens composed of x/X/0123456789 in the lower 40% of the ROI.
+    """
+    h, w = bgr.shape[:2]
+    roi_y = int(0.55 * h)
+    crop = bgr[roi_y:h, :]
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    try:
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray = clahe.apply(gray)
+    except Exception:
+        pass
+    cfg = "--psm 6 -l eng -c tessedit_char_whitelist=0123456789xX"
+    try:
+        data = pytesseract.image_to_data(gray, config=cfg, output_type=pytesseract.Output.DICT)
+    except Exception:
+        return None
+    n = len(data.get("text", []))
+    best_x = None
+    best_center = None
+    for i in range(n):
+        t = (data["text"][i] or "").strip()
+        if not t:
+            continue
+        # Keep short tokens likely to be 'x' or small numbers
+        if len(t) > 3:
+            continue
+        lx = int(data.get("left", [0])[i])
+        ly = int(data.get("top", [0])[i])
+        ww = int(data.get("width", [0])[i])
+        hh = int(data.get("height", [0])[i])
+        if ww < 8 or hh < 10:
+            continue
+        cx = lx + ww // 2
+        cy = roi_y + ly + hh // 2
+        if best_x is None or cx < best_x:
+            best_x = cx
+            best_center = (cx, cy)
+    return best_center
+
+
+def ocr_find_words(
+    bgr: np.ndarray,
+    target: str,
+    whitelist: Optional[str] = None,
+    psm: int = 6,
+    upscale: float = 1.5,
+    exact: bool = True,
+) -> Tuple[List[Tuple[int, int, int, int]], float]:
+    """Word finder in a BGR image.
+
+    - exact=True: match only exact token equality with `target` (case-insensitive)
+    - exact=False: substring allowed (use sparingly)
+    Returns (boxes, best_conf). Boxes are (x,y,w,h) in the input image coordinates.
+    """
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    if upscale != 1.0:
+        gray = cv2.resize(gray, None, fx=upscale, fy=upscale, interpolation=cv2.INTER_CUBIC)
+    cfg = f"--psm {psm} -l eng"
+    if whitelist:
+        cfg += f" -c tessedit_char_whitelist={whitelist}"
+    try:
+        data = pytesseract.image_to_data(gray, config=cfg, output_type=pytesseract.Output.DICT)
+    except Exception:
+        return [], 0.0
+    n = len(data.get("text", []))
+    boxes: List[Tuple[int, int, int, int]] = []
+    scores: List[float] = []
+    tgt = target.lower()
+    for i in range(n):
+        text = (data["text"][i] or "").strip().lower()
+        if not text:
+            continue
+        lefts = data.get("left", [])
+        tops = data.get("top", [])
+        widths = data.get("width", [])
+        heights = data.get("height", [])
+        if i >= len(lefts) or i >= len(tops) or i >= len(widths) or i >= len(heights):
+            continue
+        x = int(lefts[i] / upscale)
+        y = int(tops[i] / upscale)
+        w = int(widths[i] / upscale)
+        h = int(heights[i] / upscale)
+        conf_list = data.get("conf", [])
+        conf_str = conf_list[i] if i < len(conf_list) else "0"
+        try:
+            conf = float(conf_str)
+        except Exception:
+            conf = 0.0
+        if conf < 0:
+            conf = 0.0
+        if (text == tgt) if exact else (tgt in text or text in tgt):
+            boxes.append((x, y, w, h))
+            scores.append(conf / 100.0)
+    if not boxes:
+        return [], 0.0
+    keep = _nms(boxes, scores, 0.5)
+    boxes = [boxes[i] for i in keep]
+    scores = [scores[i] for i in keep]
+    best = max(scores) if scores else 0.0
+    return boxes, best
+
+
+def ocr_find_tokens(
+    bgr: np.ndarray,
+    tokens: List[str],
+    whitelist: Optional[str] = None,
+    psm: int = 6,
+    upscale: float = 1.5,
+) -> dict[str, List[Tuple[int, int, int, int]]]:
+    """Find multiple exact tokens in one OCR pass, return mapping token->boxes."""
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    if upscale != 1.0:
+        gray = cv2.resize(gray, None, fx=upscale, fy=upscale, interpolation=cv2.INTER_CUBIC)
+    cfg = f"--psm {psm} -l eng"
+    if whitelist:
+        cfg += f" -c tessedit_char_whitelist={whitelist}"
+    try:
+        data = pytesseract.image_to_data(gray, config=cfg, output_type=pytesseract.Output.DICT)
+    except Exception:
+        return {t.lower(): [] for t in tokens}
+    want = {t.lower(): [] for t in tokens}
+    n = len(data.get("text", []))
+    for i in range(n):
+        text = (data["text"][i] or "").strip().lower()
+        if not text:
+            continue
+        lefts = data.get("left", [])
+        tops = data.get("top", [])
+        widths = data.get("width", [])
+        heights = data.get("height", [])
+        if i >= len(lefts) or i >= len(tops) or i >= len(widths) or i >= len(heights):
+            continue
+        x = int(lefts[i] / upscale)
+        y = int(tops[i] / upscale)
+        w = int(widths[i] / upscale)
+        h = int(heights[i] / upscale)
+        if text in want:
+            want[text].append((x, y, w, h))
+    return want

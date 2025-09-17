@@ -12,6 +12,7 @@ from bsbot.runtime.service import DetectorRuntime
 from bsbot.ui.hotkeys import HotkeyManager
 from bsbot.core.logging import init_logging
 from bsbot.core.config import load_profile, load_keys
+from bsbot.core.session import SessionRecorder
 
 
 def create_app() -> Flask:
@@ -38,8 +39,11 @@ def create_app() -> Flask:
         template = data.get("template") or None
         tess = data.get("tesseract_path") or None
         method = data.get("method") or "auto"
-        rt.start(title=title, word=word, template_path=template, tesseract_path=tess, method=method)
-        logger.info("api/start | title=%s word=%s template=%s method=%s", title, word, template, method)
+        real = bool(data.get("real_inputs", False))
+        weapon = int(data.get("weapon", 1))
+        preview_mode = (data.get("preview_mode") or "full").lower()
+        rt.start(title=title, word=word, template_path=template, tesseract_path=tess, method=method, real=real, weapon=weapon, preview_mode=preview_mode)
+        logger.info("api/start | title=%s word=%s template=%s method=%s real=%s weapon=%s preview=%s", title, word, template, method, real, weapon, preview_mode)
         return jsonify({"ok": True})
 
     @app.post("/api/pause")
@@ -117,6 +121,61 @@ def create_app() -> Flask:
             "flask": flask.__version__,
             "tesseract": tver,
         })
+
+    @app.get("/api/sessions")
+    def api_sessions():
+        from bsbot.core.session import SessionRecorder
+        return jsonify({"sessions": SessionRecorder.list_sessions()})
+
+    @app.get("/api/sessions/latest")
+    def api_sessions_latest():
+        from bsbot.core.session import SessionRecorder
+        lst = SessionRecorder.list_sessions()
+        return jsonify({"id": (lst[0] if lst else None)})
+
+    @app.get("/api/session/<sid>/events")
+    def api_session_events(sid: str):
+        base = os.path.join("logs", "sessions", sid)
+        path = os.path.join(base, "events.jsonl")
+        if not os.path.exists(path):
+            return jsonify({"events": []})
+        limit = int(request.args.get("limit", 200))
+        lines = []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()[-limit:]
+        except Exception:
+            lines = []
+        return jsonify({"events": [json.loads(l) for l in lines if l.strip()]})
+
+    @app.get("/api/session/<sid>/files")
+    def api_session_files(sid: str):
+        base = os.path.join("logs", "sessions", sid, "crops")
+        out = []
+        if os.path.isdir(base):
+            for root, _, files in os.walk(base):
+                for fn in files:
+                    rel = os.path.relpath(os.path.join(root, fn), os.path.join("logs", "sessions", sid))
+                    out.append(rel.replace("\\", "/"))
+        out.sort()
+        return jsonify({"files": out})
+
+    @app.get("/api/session/<sid>/file")
+    def api_session_file(sid: str):
+        rel = request.args.get("path", "")
+        base = os.path.abspath(os.path.join("logs", "sessions", sid))
+        full = os.path.abspath(os.path.join(base, rel))
+        if not full.startswith(base):
+            return ("bad path", 400)
+        if not os.path.exists(full):
+            return ("not found", 404)
+        return send_file(full)
+
+    @app.get("/api/timeline")
+    def api_timeline():
+        from bsbot.core.timeline import timeline
+        n = int(request.args.get("n", 50))
+        return jsonify({"events": timeline.last(n)})
 
     return app
 

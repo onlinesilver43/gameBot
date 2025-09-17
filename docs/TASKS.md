@@ -68,6 +68,21 @@
 
 **GROC5 Status: READY FOR NEXT ASSIGNMENT** 🚀
 
+## R1 — Combat (OCR‑only) Tasks (assigned to groc5)
+
+| id | title | owner | state | acceptance criteria |
+|---|---|---|---|---|
+| R1-A | OCR detectors for Attack/Prepare/Weapon/Special | groc5 | todo | OCR finds: red nameplates in name ROI; word "Attack" in right ROI; header text "PREPARE FOR BATTLE" or "CHOOSE FIRST ATTACK TO START" in prepare ROI; digit '1' within slots ROI; bottom bar text "SPECIAL ATTACKS" during combat. Detections persist ≥2 consecutive frames. |
+| R1-B | Click targets + dry‑run overlay | groc5 | todo | Compute click centers: prime under name (offset 1.4×h), Attack box center, Weapon 1 center; render planned clicks on preview; jitter ±3–5 px; min cooldown ≥250 ms; no real inputs yet. |
+| R1-C | State machine wiring + timeouts/retries | groc5 | todo | Implement Scan → PrimeTarget → AttackPanel → Prepare → WeaponSelect(1) → BattleLoop; timeouts/retries (2/1/1); transitions logged; clean recover to Scan on timeouts. |
+| R1-D | Event timeline API + UI panel | groc5 | todo | In‑memory ring buffer (last 50 events); `/api/timeline` endpoint; UI panel lists events (detect/click/confirm/timeout) with coords and ROIs; preview overlays clicks. |
+| R1-E | Real inputs (guarded toggle) | groc5 | todo | Add "Real Inputs" toggle; focus guard; execute actual clicks using computed centers; demonstrate 3 dry‑run validations before enabling real mode; safety cooldowns enforced. |
+
+Notes
+- Default preferred weapon = 1.
+- Battle-on sentinel: OCR "SPECIAL ATTACKS" in bottom bar ROI; battle-over when absent for M=6 frames (~1.8 s at 300 ms loop).
+- Log schema per event: ts, state, type, label, roi, boxes, best_conf, click{x,y}, input{mode,jitter_px,delay_ms}, notes.
+
 ## Notes
 - Keep tasks small and independently verifiable.
 - Update `owner/state` and append validation steps when you pick up an item.

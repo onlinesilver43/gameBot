@@ -374,6 +374,31 @@
               </select>
             </div>
 
+            <div class="form-group">
+              <label for="weapon">Preferred Weapon Slot</label>
+              <select id="weapon">
+                <option value="1" selected>1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="real">Real Inputs</label>
+              <select id="real">
+                <option value="false" selected>Dry-run (no clicks)</option>
+                <option value="true">Real clicks (use with care)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="preview_mode">Preview Mode</label>
+              <select id="preview_mode">
+                <option value="full" selected>Full Window</option>
+                <option value="roi">Active ROI Only</option>
+              </select>
+            </div>
+
             <div class="button-group">
               <button id="start" class="btn btn-primary" type="button">▶️ Start</button>
               <button id="pause" class="btn btn-secondary" type="button">⏸️ Pause</button>
@@ -401,6 +426,28 @@
           <div id="logs" class="logs-panel"></div>
         </div>
       </div>
+
+      <div class="card">
+        <h3>🧪 Diagnostics</h3>
+        <div class="button-group">
+          <button id="loadLatest" class="btn btn-secondary" type="button">Load Latest Session</button>
+        </div>
+        <div class="grid">
+          <div>
+            <h4>Events (tail)</h4>
+            <div id="diagEvents" class="status-panel" style="height:240px;overflow:auto"></div>
+          </div>
+          <div>
+            <h4>Crops</h4>
+            <div id="diagFiles" class="status-panel" style="height:240px;overflow:auto"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>🧭 Event Timeline</h3>
+        <div id="timeline" class="status-panel"></div>
+      </div>
     </div>
 
     <script>
@@ -419,6 +466,9 @@
             template: $("template").value || null,
             tesseract_path: $("tess").value || null,
             method: $("method").value,
+            weapon: parseInt($("weapon").value),
+            real_inputs: $("real").value === 'true',
+            preview_mode: $("preview_mode").value,
           };
 
           const response = await fetch('/api/start', {
@@ -539,6 +589,17 @@
         } catch (e) {
           console.warn('Logs update failed:', e);
         }
+
+        try {
+          const t = await fetch('/api/timeline?n=50');
+          if (t.ok) {
+            const j = await t.json();
+            const lines = (j.events || []).map(e => `${e.ts} | ${e.state} | ${e.type} | ${e.label} ${e.data && e.data.click ? `@(${e.data.click.x},${e.data.click.y})` : ''}`).join('\n');
+            $("timeline").textContent = lines || 'No events yet';
+          }
+        } catch (e) {
+          // ignore
+        }
       }
 
       // Start polling
@@ -569,6 +630,20 @@
           });
         });
       });
+
+      // Diagnostics helpers
+      async function loadLatestSession() {
+        const r = await fetch('/api/sessions/latest');
+        const j = await r.json();
+        if (!j.id) { $("diagEvents").textContent = 'No sessions yet'; return; }
+        const ev = await fetch(`/api/session/${j.id}/events?limit=200`).then(r=>r.json());
+        const lines = (ev.events||[]).map(e=> JSON.stringify(e)).join('\n');
+        $("diagEvents").textContent = lines || 'No events';
+        const fl = await fetch(`/api/session/${j.id}/files`).then(r=>r.json());
+        const files = fl.files||[];
+        $("diagFiles").innerHTML = files.map(f=>`<div><a href="/api/session/${j.id}/file?path=${encodeURIComponent(f)}" target="_blank">${f}</a></div>`).join('');
+      }
+      $("loadLatest").onclick = loadLatestSession;
     </script>
   </body>
   </html>
