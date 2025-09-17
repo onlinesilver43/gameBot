@@ -39,8 +39,10 @@ def create_app() -> Flask:
         tess = data.get("tesseract_path") or None
         method = data.get("method") or "auto"
         click_mode = data.get("click_mode") or "dry_run"
-        attack_word = data.get("attack_word") or None
+        prefix_word = data.get("prefix_word") if "prefix_word" in data else None
         skill = data.get("skill") or None
+        monster_id = data.get("monster_id") or None
+        interface_id = data.get("interface_id") or None
         roi = data.get("roi") or None
         if isinstance(roi, list) and len(roi) == 4:
             try:
@@ -49,7 +51,19 @@ def create_app() -> Flask:
                 roi = None
         else:
             roi = None
-        rt.start(title=title, word=word, template_path=template, tesseract_path=tess, method=method, attack_word=attack_word, roi=roi, click_mode=click_mode, skill=skill)
+        rt.start(
+            title=title,
+            word=word,
+            prefix_word=prefix_word,
+            template_path=template,
+            tesseract_path=tess,
+            method=method,
+            roi=roi,
+            click_mode=click_mode,
+            skill=skill,
+            monster_id=monster_id,
+            interface_id=interface_id,
+        )
         logger.info(
             "api/start | title=%s word=%s template=%s method=%s click_mode=%s skill=%s",
             title,
@@ -91,6 +105,9 @@ def create_app() -> Flask:
             "last_result": s.last_result,
             "title": s.title,
             "word": s.word,
+            "prefix_word": s.prefix_word,
+            "monster_id": s.monster_id,
+            "interface_id": s.interface_id,
             "template": s.template_path,
             "method": s.method,
             "click_mode": s.click_mode,
@@ -158,13 +175,14 @@ def _toggle_pause(rt: DetectorRuntime, logger: logging.Logger):
         rt.start(
             title=s.title,
             word=s.word,
+            prefix_word=s.prefix_word,
             template_path=s.template_path,
             tesseract_path=s.tesseract_path,
             method=s.method,
-            attack_word=s.attack_word,
             roi=s.roi,
             click_mode=s.click_mode,
             skill=s.skill,
+            monster_id=s.monster_id,
         )
         logger.info("hotkey: resume/start")
 

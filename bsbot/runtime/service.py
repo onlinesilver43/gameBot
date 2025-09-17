@@ -23,12 +23,14 @@ class DetectionStatus:
     last_frame: Optional[bytes] = None  # JPEG bytes for preview
     template_path: Optional[str] = None
     title: str = "Brighter Shores"
-    word: str = "Wendigo"
-    attack_word: str = "Attack"
+    word: str = ""
+    prefix_word: Optional[str] = None
     tesseract_path: Optional[str] = None
     method: str = "auto"  # auto, template, ocr
     click_mode: str = "dry_run"  # dry_run, live
     skill: str = "combat"
+    monster_id: str = "twisted_wendigo"
+    interface_id: str = "combat"
     # Relative ROI (x,y,w,h) over the game client area.
     # Use full window by default to cover the whole app screen.
     roi: Tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
@@ -57,6 +59,8 @@ class DetectorRuntime:
         self._click_jitter_px = 5
         self._click_move_duration = 0.16
         self._click_down_delay = 0.05
+        self._recent_clicks: List[Dict[str, Any]] = []
+        self._loop_sleep = 0.2
         self._register_default_skills()
 
     def _register_default_skills(self) -> None:
@@ -78,7 +82,9 @@ class DetectorRuntime:
         return {
             "title": self.status.title,
             "word": self.status.word,
-            "attack_word": self.status.attack_word,
+            "prefix_word": self.status.prefix_word,
+            "monster_id": self.status.monster_id,
+            "interface_id": self.status.interface_id,
             "template_path": self.status.template_path,
             "tesseract_path": self.status.tesseract_path,
             "method": self.status.method,
@@ -90,24 +96,35 @@ class DetectorRuntime:
         self,
         title: Optional[str] = None,
         word: Optional[str] = None,
+        prefix_word: Optional[str] = None,
         template_path: Optional[str] = None,
         tesseract_path: Optional[str] = None,
         method: Optional[str] = None,
-        attack_word: Optional[str] = None,
         roi: Optional[Tuple[float, float, float, float]] = None,
         click_mode: Optional[str] = None,
         skill: Optional[str] = None,
+        monster_id: Optional[str] = None,
+        interface_id: Optional[str] = None,
     ) -> None:
         with self._lock:
             if skill:
                 if self.status.running and skill != self._skill_name:
                     raise ValueError("Cannot change skill while runtime is active")
                 self._set_skill(skill)
+            if monster_id:
+                if self.status.running and monster_id != self.status.monster_id:
+                    raise ValueError("Cannot change monster while runtime is active")
+                self.status.monster_id = monster_id
+            if interface_id:
+                if self.status.running and interface_id != self.status.interface_id:
+                    raise ValueError("Cannot change interface while runtime is active")
+                self.status.interface_id = interface_id
             if self.status.running:
                 # Update parameters while running
                 if title: self.status.title = title
                 if word: self.status.word = word
-                if attack_word: self.status.attack_word = attack_word
+                if prefix_word is not None:
+                    self.status.prefix_word = prefix_word or None
                 if template_path: self.status.template_path = template_path
                 if tesseract_path: self.status.tesseract_path = tesseract_path
                 if method: self.status.method = method
@@ -120,7 +137,12 @@ class DetectorRuntime:
                 return
             if title: self.status.title = title
             if word: self.status.word = word
-            if attack_word: self.status.attack_word = attack_word
+            if prefix_word is not None:
+                self.status.prefix_word = prefix_word or None
+            if monster_id:
+                self.status.monster_id = monster_id
+            if interface_id:
+                self.status.interface_id = interface_id
             if method: self.status.method = method
             if click_mode in {"dry_run", "live"}:
                 self.status.click_mode = click_mode
@@ -131,6 +153,7 @@ class DetectorRuntime:
             self.status.paused = False
             self._stop_evt.clear()
             self._last_live_click.clear()
+            self._recent_clicks.clear()
             self._get_controller().on_start(self._current_params())
             self._thread = threading.Thread(target=self._run_loop, daemon=True)
             self._thread.start()
@@ -185,7 +208,7 @@ class DetectorRuntime:
             except Exception as e:
                 self._set_result({"error": str(e)}, frame=None)
                 self.logger.exception("runtime error")
-            time.sleep(0.3)
+            time.sleep(self._loop_sleep)
 
     def _roi_pixels(self, x: int, y: int, w: int, h: int) -> Tuple[int, int, int, int]:
         rx, ry, rw, rh = self.status.roi
@@ -228,6 +251,7 @@ class DetectorRuntime:
                     click={"x": int(cx), "y": int(cy), "mode": self.status.click_mode},
                     state=st,
                 )
+                self._record_recent_click(int(cx), int(cy), lbl)
                 break
 
     def emit_event(
@@ -282,3 +306,19 @@ class DetectorRuntime:
             )
         except Exception as exc:
             self.logger.exception("live click failed | label=%s error=%s", label, exc)
+
+    def _record_recent_click(self, x: int, y: int, label: str) -> None:
+        now = time.time()
+        with self._lock:
+            self._recent_clicks.append({"ts": now, "x": x, "y": y, "label": label})
+            # keep last 10 clicks
+            if len(self._recent_clicks) > 10:
+                self._recent_clicks = self._recent_clicks[-10:]
+
+    def get_recent_clicks(self, max_age: float = 1.0) -> List[Dict[str, Any]]:
+        cutoff = time.time() - max_age
+        with self._lock:
+            fresh = [c for c in self._recent_clicks if c["ts"] >= cutoff]
+            if len(fresh) != len(self._recent_clicks):
+                self._recent_clicks = fresh
+            return [c.copy() for c in fresh]

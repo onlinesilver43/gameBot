@@ -29,7 +29,8 @@ Quick Start
 
 3) Start detection from the UI
    - Title: exact window title (default: `Brighter Shores`).
-   - Word: OCR target (default: `Wendigo`).
+   - Monster Profile: id from `config/monsters/` (e.g., `twisted_wendigo`).
+   - Word: OCR target override (profile default used when empty).
    - Template Path: optional PNG for template matching (e.g. `assets\\templates\\wendigo.png`).
    - Tesseract Path: optional `tesseract.exe` path if not on PATH.
    - Method: `auto`, `template`, or `ocr`.

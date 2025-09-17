@@ -73,6 +73,7 @@ scripts\serve.ps1 -Port 8083 -LogLevel INFO
 ## Combat Detection Phase Plan
 - **Search For Monster** — ROI scanning + OCR/template fallback active 🔄 (untested)
 - **Detect Monster Nameplate** — Wendigo OCR/templating confirmed, timeline logs ✅
+- **Variant Filtering** — Optional prefix OCR (e.g., "Twisted") gates target selection 🔄 (needs validation)
 - **Click Monster** — Human click driver wired; needs validation 🔄
 - **Detect Attack Box** — Attack OCR in combat ROI, confidence logged ✅
 - **Click Attack Box** — Human click driver wired; needs validation 🔄
@@ -82,6 +83,7 @@ scripts\serve.ps1 -Port 8083 -LogLevel INFO
 - **Detect Fight Started** — HUD token check coded, needs validation 🔄
 - **Detect Fight Complete** — Absence counter coded, needs validation 🔄
 - **Reset To Search** — FSM recovery path returns to scanning 🔄 (untested)
+- **Preview Enhancements** — Faster polling + live click overlay to mirror bot actions 🔄 (needs field verification)
 
 ## Final Status
 **GROC5 Implementation Phase: COMPLETE ✅**

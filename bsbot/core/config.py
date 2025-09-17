@@ -34,8 +34,16 @@ class Config:
         return self._load_config("keys.yml")
 
     def load_elements(self, category: str) -> Dict[str, Any]:
-        """Load element configurations for a specific category (monsters, loot, etc.)."""
+        """Load element configurations for a specific category (legacy)."""
         return self._load_config(f"elements/{category}.yml")
+
+    def load_monster_profile(self, monster_id: str) -> Dict[str, Any]:
+        """Load a monster profile by id."""
+        return self._load_config(f"monsters/{monster_id}.yml")
+
+    def load_interface_profile(self, interface_id: str) -> Dict[str, Any]:
+        """Load an interface profile by id."""
+        return self._load_config(f"interfaces/{interface_id}.yml")
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load a YAML config file with environment variable overrides."""
@@ -144,3 +152,13 @@ def load_keys() -> Dict[str, Any]:
 def load_elements(category: str) -> Dict[str, Any]:
     """Convenience function to load element configs."""
     return get_config().load_elements(category)
+
+
+def load_monster_profile(monster_id: str) -> Dict[str, Any]:
+    """Convenience wrapper for monster profiles."""
+    return get_config().load_monster_profile(monster_id)
+
+
+def load_interface_profile(interface_id: str) -> Dict[str, Any]:
+    """Convenience wrapper for interface profiles."""
+    return get_config().load_interface_profile(interface_id)

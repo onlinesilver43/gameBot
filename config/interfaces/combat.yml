@@ -1,0 +1,13 @@
+id: combat
+name: "Combat HUD"
+attack_word: "Attack"
+prepare_targets:
+  - "prepare"
+  - "choose"
+weapon_digits:
+  - "1"
+  - "2"
+  - "3"
+special_tokens:
+  - "special"
+  - "attacks"

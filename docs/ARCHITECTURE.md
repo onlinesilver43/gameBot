@@ -31,7 +31,7 @@ The Brighter Shores bot is a Windows-only, screen-driven automation framework. T
 - `assets/images/` — Full screenshots for testing and template extraction.
 - `config/profile.yml` — Default window title, ROI, delays, and detection thresholds.
 - `config/keys.yml` — Key bindings for combat/interaction actions.
-- `config/elements/` — Per-element detection hints (monsters, loot, etc.).
+- `config/elements/` — Per-element detection hints (monsters, loot, etc.); monster profiles can include base word, optional prefix, and attack cues for variant targeting.
 
 ## Detection Pipelines
 

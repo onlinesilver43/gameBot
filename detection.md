@@ -1,6 +1,6 @@
 # Combat Detection Overview
 
-Combat detection now lives inside a dedicated skill controller (`bsbot.skills.combat.controller.CombatController`) that drives the OCR-first pipeline, state machine, and planned clicks. The `DetectorRuntime` orchestrator spins the capture loop, delegates each frame to the active skill, and records timeline events while keeping reusable services (capture, logging, human-like clicking) in shared layers.
+Combat detection now lives inside a dedicated skill controller (`bsbot.skills.combat.controller.CombatController`) that drives the OCR-first pipeline, state machine, and planned clicks. Optional monster profiles (e.g., prefix filtering) let us target variants like Twisted Wendigo. The `DetectorRuntime` orchestrator spins the capture loop, delegates each frame to the active skill, and records timeline events while keeping reusable services (capture, logging, human-like clicking) in shared layers.
 
 ## bsbot/skills/combat/controller.py
 ```python
@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 
 from bsbot.skills.base import FrameContext, SkillController
+from bsbot.core.config import load_elements
 from bsbot.vision.detect import (
     configure_tesseract,
     detect_digits_ocr_multi,
@@ -43,6 +44,11 @@ class CombatController(SkillController):
         self._absent_counter = 0
         self._last_log_ts = 0.0
         self._last_found: Optional[bool] = None
+        self.monster_id = "wendigo"
+        self.word = "Wendigo"
+        self.prefix_word: Optional[str] = None
+        self.attack_word = "Attack"
+        self._monster_cache: Optional[Dict[str, Dict[str, object]]] = None
 
     # ------------------------------------------------------------------
     def on_start(self, params: Dict[str, object] | None = None) -> None:
@@ -50,11 +56,46 @@ class CombatController(SkillController):
         self._absent_counter = 0
         self._last_log_ts = 0.0
         self._last_found = None
+        self._apply_params(params or {})
         self.runtime.set_state(self._state)
 
     def on_stop(self) -> None:
         self._state = "Scan"
         self.runtime.set_state(self._state)
+
+    def on_update_params(self, params: Dict[str, object] | None = None) -> None:
+        if params:
+            self._apply_params(params)
+
+    def _load_monsters(self) -> Dict[str, Dict[str, object]]:
+        if self._monster_cache is None:
+            try:
+                data = load_elements("monsters") or {}
+            except Exception:
+                data = {}
+            self._monster_cache = {k: (v or {}) for k, v in data.items()}
+        return self._monster_cache
+
+    def _apply_params(self, params: Dict[str, object]) -> None:
+        monsters = self._load_monsters()
+        monster_id = params.get("monster_id") or self.runtime.status.monster_id or self.monster_id
+        profile = monsters.get(str(monster_id), {})
+
+        word = params.get("word") or profile.get("word") or self.word
+        prefix = params.get("prefix_word")
+        if prefix is None:
+            prefix = profile.get("prefix")
+        attack = profile.get("attack_word") or self.attack_word
+
+        self.monster_id = str(monster_id)
+        self.word = str(word)
+        self.prefix_word = str(prefix) if prefix else None
+        self.attack_word = str(attack)
+
+        status = self.runtime.status
+        status.monster_id = self.monster_id
+        status.word = self.word
+        status.prefix_word = self.prefix_word
 
     def process_frame(self, frame, ctx: FrameContext) -> Tuple[Dict[str, object], Optional[bytes]]:
         status = self.runtime.status
@@ -87,7 +128,12 @@ class CombatController(SkillController):
             else:
                 method = "ocr"
 
-        attack_boxes, attack_conf = detect_word_ocr_multi(frame, target=status.attack_word)
+        attack_boxes, attack_conf = detect_word_ocr_multi(frame, target=self.attack_word)
+
+        prefix_boxes: List[Tuple[int, int, int, int]] = []
+        prefix_conf = 0.0
+        if status.prefix_word:
+            prefix_boxes, prefix_conf = detect_word_ocr_multi(frame, target=status.prefix_word)
 
         # Focused HUD regions ------------------------------------------------
         apx, apy = int(0.55 * rw), int(0.20 * rh)
@@ -122,8 +168,11 @@ class CombatController(SkillController):
         wpy = ppy + int(0.50 * pph)
         digit_boxes = [(wpx + bx, wpy + by, bw, bh) for (bx, by, bw, bh) in digit_boxes_local]
 
+        prefix_ok = not self.prefix_word or bool(prefix_boxes)
+        target_ready = bool(boxes) and prefix_ok
+
         planned_clicks: List[PlannedClick] = []
-        if boxes:
+        if target_ready:
             bx, by, bw, bh = boxes[0]
             cx = rx + bx + bw // 2
             cy = ry + by + int(1.4 * bh)
@@ -152,9 +201,11 @@ class CombatController(SkillController):
             atks_boxes,
             digit_boxes,
             digit_conf,
+            prefix_boxes,
+            prefix_conf,
             roi_rect,
         )
-        self._advance_state(boxes, attack_boxes, prepare_boxes, digit_boxes, special_attacks_present, planned_clicks, roi_rect)
+        self._advance_state(target_ready, attack_boxes, prepare_boxes, digit_boxes, special_attacks_present, planned_clicks, roi_rect)
 
         annotated = frame.copy()
         for (bx, by, bw, bh) in boxes:
@@ -172,15 +223,36 @@ class CombatController(SkillController):
             fy = planned.y - ry
             cv2.drawMarker(annotated, (int(fx), int(fy)), (255, 0, 255), markerType=cv2.MARKER_CROSS, markerSize=12, thickness=2)
 
-        ok, jpg = cv2.imencode(".jpg", annotated)
+        # Overlay recent real clicks (within ~1s)
+        for click in self.runtime.get_recent_clicks():
+            cx = int(click.get("x", 0)) - rx
+            cy = int(click.get("y", 0)) - ry
+            if cx < 0 or cy < 0 or cx >= rw or cy >= rh:
+                continue
+            cv2.circle(annotated, (cx, cy), 16, (0, 165, 255), 3)
+            cv2.circle(annotated, (cx, cy), 4, (0, 165, 255), -1)
+            label = click.get("label", "")
+            if label:
+                cv2.putText(
+                    annotated,
+                    label,
+                    (cx + 10, cy - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 165, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+
+        ok, jpg = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
         preview = jpg.tobytes() if ok else None
 
         count = len(boxes)
-        if count:
+        if target_ready and count:
             status.total_detections += count
 
         result = {
-            "found": count > 0,
+            "found": target_ready,
             "count": count,
             "confidence": best_conf,
             "method": method,
@@ -190,7 +262,7 @@ class CombatController(SkillController):
                 "count": len(attack_boxes),
                 "confidence": attack_conf,
                 "boxes": attack_boxes,
-                "word": status.attack_word,
+                "word": self.attack_word,
             },
             "prepare": {
                 "found": bool(prepare_boxes),
@@ -210,6 +282,13 @@ class CombatController(SkillController):
                 "confidence": digit_conf,
                 "boxes": digit_boxes,
             },
+            "prefix": {
+                "found": bool(prefix_boxes),
+                "count": len(prefix_boxes),
+                "confidence": prefix_conf,
+                "boxes": prefix_boxes,
+                "word": self.prefix_word,
+            },
             "planned_clicks": [
                 {"x": planned.x, "y": planned.y, "label": planned.label}
                 for planned in planned_clicks
@@ -219,7 +298,7 @@ class CombatController(SkillController):
             "state": self._state,
         }
 
-        self._log_detection(count > 0, count, best_conf, method, attack_boxes, attack_conf, prepare_boxes, prepare_conf, special_attacks_present, special_attacks_conf, digit_boxes, digit_conf)
+        self._log_detection(target_ready, count, best_conf, method, attack_boxes, attack_conf, prepare_boxes, prepare_conf, special_attacks_present, special_attacks_conf, digit_boxes, digit_conf, prefix_boxes, prefix_conf)
         return result, preview
 
     # ------------------------------------------------------------------
@@ -237,12 +316,16 @@ class CombatController(SkillController):
         atks_boxes,
         digit_boxes,
         digit_conf,
+        prefix_boxes,
+        prefix_conf,
         roi_rect,
     ) -> None:
         if boxes:
             self.runtime.emit_event("detect", "nameplate", roi_rect, boxes, best_conf, state=self._state)
         if attack_boxes:
             self.runtime.emit_event("detect", "attack_button", roi_rect, attack_boxes, attack_conf, state=self._state)
+        if prefix_boxes:
+            self.runtime.emit_event("detect", "name_prefix", roi_rect, prefix_boxes, prefix_conf, state=self._state)
         if prepare_boxes:
             self.runtime.emit_event("detect", "prepare_header", roi_rect, prepare_boxes, prepare_conf, state=self._state)
         if special_attacks_present:
@@ -253,7 +336,7 @@ class CombatController(SkillController):
 
     def _advance_state(
         self,
-        boxes,
+        target_ready: bool,
         attack_boxes,
         prepare_boxes,
         digit_boxes,
@@ -265,14 +348,14 @@ class CombatController(SkillController):
         click_tuples = [pc.to_tuple() for pc in planned_clicks]
 
         if self._state == "Scan":
-            if boxes:
+            if target_ready:
                 runtime.emit_click(click_tuples, "prime_nameplate", state=self._state)
                 self._transition("PrimeTarget")
         elif self._state == "PrimeTarget":
             if attack_boxes:
                 runtime.emit_click(click_tuples, "attack_button", state=self._state)
                 self._transition("AttackPanel")
-            elif not boxes:
+            elif not target_ready:
                 self._transition("Scan")
         elif self._state == "AttackPanel":
             if prepare_boxes:
@@ -307,7 +390,7 @@ class CombatController(SkillController):
         self.runtime.set_state(new_state)
         self.runtime.emit_event("transition", f"{prev}->{new_state}", [0, 0, 0, 0], [], 0.0, state=new_state)
 
-    def _log_detection(self, found: bool, count: int, best_conf: float, method: str, attack_boxes, attack_conf, prepare_boxes, prepare_conf, special_attacks_present: bool, special_attacks_conf: float, digit_boxes, digit_conf) -> None:
+    def _log_detection(self, found: bool, count: int, best_conf: float, method: str, attack_boxes, attack_conf, prepare_boxes, prepare_conf, special_attacks_present: bool, special_attacks_conf: float, digit_boxes, digit_conf, prefix_boxes, prefix_conf) -> None:
         now = time.time()
         if self._last_found is not found or now - self._last_log_ts > 2.0:
             self.runtime.logger.info("detect | found=%s count=%d conf=%.3f method=%s", found, count, best_conf, method)
@@ -319,6 +402,8 @@ class CombatController(SkillController):
                 self.runtime.logger.info("detect_special_attacks | found=True conf=%.3f", special_attacks_conf)
             if digit_boxes:
                 self.runtime.logger.info("detect_weapon_1 | found=True count=%d conf=%.3f", len(digit_boxes), digit_conf)
+            if prefix_boxes:
+                self.runtime.logger.info("detect_prefix | found=True count=%d conf=%.3f", len(prefix_boxes), prefix_conf)
             self._last_log_ts = now
             self._last_found = found
 
@@ -370,11 +455,12 @@ class DetectionStatus:
     template_path: Optional[str] = None
     title: str = "Brighter Shores"
     word: str = "Wendigo"
-    attack_word: str = "Attack"
+    prefix_word: Optional[str] = None
     tesseract_path: Optional[str] = None
     method: str = "auto"  # auto, template, ocr
     click_mode: str = "dry_run"  # dry_run, live
     skill: str = "combat"
+    monster_id: str = "wendigo"
     # Relative ROI (x,y,w,h) over the game client area.
     # Use full window by default to cover the whole app screen.
     roi: Tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
@@ -403,6 +489,8 @@ class DetectorRuntime:
         self._click_jitter_px = 5
         self._click_move_duration = 0.16
         self._click_down_delay = 0.05
+        self._recent_clicks: List[Dict[str, Any]] = []
+        self._loop_sleep = 0.2
         self._register_default_skills()
 
     def _register_default_skills(self) -> None:
@@ -424,7 +512,8 @@ class DetectorRuntime:
         return {
             "title": self.status.title,
             "word": self.status.word,
-            "attack_word": self.status.attack_word,
+            "prefix_word": self.status.prefix_word,
+            "monster_id": self.status.monster_id,
             "template_path": self.status.template_path,
             "tesseract_path": self.status.tesseract_path,
             "method": self.status.method,
@@ -436,24 +525,30 @@ class DetectorRuntime:
         self,
         title: Optional[str] = None,
         word: Optional[str] = None,
+        prefix_word: Optional[str] = None,
         template_path: Optional[str] = None,
         tesseract_path: Optional[str] = None,
         method: Optional[str] = None,
-        attack_word: Optional[str] = None,
         roi: Optional[Tuple[float, float, float, float]] = None,
         click_mode: Optional[str] = None,
         skill: Optional[str] = None,
+        monster_id: Optional[str] = None,
     ) -> None:
         with self._lock:
             if skill:
                 if self.status.running and skill != self._skill_name:
                     raise ValueError("Cannot change skill while runtime is active")
                 self._set_skill(skill)
+            if monster_id:
+                if self.status.running and monster_id != self.status.monster_id:
+                    raise ValueError("Cannot change monster while runtime is active")
+                self.status.monster_id = monster_id
             if self.status.running:
                 # Update parameters while running
                 if title: self.status.title = title
                 if word: self.status.word = word
-                if attack_word: self.status.attack_word = attack_word
+                if prefix_word is not None:
+                    self.status.prefix_word = prefix_word or None
                 if template_path: self.status.template_path = template_path
                 if tesseract_path: self.status.tesseract_path = tesseract_path
                 if method: self.status.method = method
@@ -466,7 +561,10 @@ class DetectorRuntime:
                 return
             if title: self.status.title = title
             if word: self.status.word = word
-            if attack_word: self.status.attack_word = attack_word
+            if prefix_word is not None:
+                self.status.prefix_word = prefix_word or None
+            if monster_id:
+                self.status.monster_id = monster_id
             if method: self.status.method = method
             if click_mode in {"dry_run", "live"}:
                 self.status.click_mode = click_mode
@@ -477,6 +575,7 @@ class DetectorRuntime:
             self.status.paused = False
             self._stop_evt.clear()
             self._last_live_click.clear()
+            self._recent_clicks.clear()
             self._get_controller().on_start(self._current_params())
             self._thread = threading.Thread(target=self._run_loop, daemon=True)
             self._thread.start()
@@ -531,7 +630,7 @@ class DetectorRuntime:
             except Exception as e:
                 self._set_result({"error": str(e)}, frame=None)
                 self.logger.exception("runtime error")
-            time.sleep(0.3)
+            time.sleep(self._loop_sleep)
 
     def _roi_pixels(self, x: int, y: int, w: int, h: int) -> Tuple[int, int, int, int]:
         rx, ry, rw, rh = self.status.roi
@@ -574,6 +673,7 @@ class DetectorRuntime:
                     click={"x": int(cx), "y": int(cy), "mode": self.status.click_mode},
                     state=st,
                 )
+                self._record_recent_click(int(cx), int(cy), lbl)
                 break
 
     def emit_event(
@@ -628,6 +728,22 @@ class DetectorRuntime:
             )
         except Exception as exc:
             self.logger.exception("live click failed | label=%s error=%s", label, exc)
+
+    def _record_recent_click(self, x: int, y: int, label: str) -> None:
+        now = time.time()
+        with self._lock:
+            self._recent_clicks.append({"ts": now, "x": x, "y": y, "label": label})
+            # keep last 10 clicks
+            if len(self._recent_clicks) > 10:
+                self._recent_clicks = self._recent_clicks[-10:]
+
+    def get_recent_clicks(self, max_age: float = 1.0) -> List[Dict[str, Any]]:
+        cutoff = time.time() - max_age
+        with self._lock:
+            fresh = [c for c in self._recent_clicks if c["ts"] >= cutoff]
+            if len(fresh) != len(self._recent_clicks):
+                self._recent_clicks = fresh
+            return [c.copy() for c in fresh]
 ```
 
 ## bsbot/vision/detect.py
@@ -970,7 +1086,10 @@ def derive_hitbox_from_word(word_bbox: Tuple[int, int, int, int]) -> Tuple[int, 
 # Monster Detection Elements
 # Template and color configurations for enemy detection
 
-wendigo:
+wendigo: &wendigo_base
+  word: "Wendigo"
+  prefix: null
+  attack_word: "Attack"
   template: "assets/templates/wendigo.png"
   regions:
     - [0.2, 0.25, 0.6, 0.5]  # Central ROI
@@ -978,6 +1097,10 @@ wendigo:
     - { color: "0xFF0000", tolerance: 30 }  # Red health bars
   confidence_threshold: 0.65
   click_offset: [0, -20]
+
+twisted_wendigo:
+  <<: *wendigo_base
+  prefix: "Twisted"
 
 basic_enemy:
   regions:

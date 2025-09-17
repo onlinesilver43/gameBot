@@ -351,8 +351,23 @@
             </div>
 
             <div class="form-group">
+              <label for="monster_id">Monster Profile</label>
+              <input id="monster_id" type="text" value="wendigo" placeholder="Monster id (e.g., wendigo)" />
+            </div>
+
+            <div class="form-group">
+              <label for="interface_id">Interface Profile</label>
+              <input id="interface_id" type="text" value="combat" placeholder="Interface id (e.g., combat)" />
+            </div>
+
+            <div class="form-group">
               <label for="word">Detection Target</label>
               <input id="word" type="text" value="Wendigo" placeholder="Word to detect" />
+            </div>
+
+            <div class="form-group">
+              <label for="prefix_word">Prefix Word (Optional)</label>
+              <input id="prefix_word" type="text" placeholder="Twisted" />
             </div>
 
             <div class="form-group">
@@ -428,6 +443,9 @@
             const body = {
               title: $("title").value,
               word: $("word").value,
+              prefix_word: $("prefix_word").value || null,
+              monster_id: $("monster_id").value || null,
+              interface_id: $("interface_id").value || null,
               template: $("template").value || null,
               tesseract_path: $("tess").value || null,
               method: $("method").value,
@@ -532,10 +550,29 @@
               pauseBtn.textContent = "⏸️ Pause";
             }
 
-            if (nice.click_mode) {
+            if (nice.running && nice.click_mode) {
               const modeSelect = $("click_mode");
               if (modeSelect && modeSelect.value !== nice.click_mode) {
                 modeSelect.value = nice.click_mode;
+              }
+            }
+
+            if (Object.prototype.hasOwnProperty.call(nice, 'prefix_word')) {
+              const prefixInput = $("prefix_word");
+              if (prefixInput) {
+                prefixInput.value = nice.prefix_word || '';
+              }
+            }
+            if (Object.prototype.hasOwnProperty.call(nice, 'monster_id')) {
+              const monsterInput = $("monster_id");
+              if (monsterInput) {
+                monsterInput.value = nice.monster_id || '';
+              }
+            }
+            if (Object.prototype.hasOwnProperty.call(nice, 'interface_id')) {
+              const interfaceInput = $("interface_id");
+              if (interfaceInput) {
+                interfaceInput.value = nice.interface_id || '';
               }
             }
           }
@@ -587,7 +624,7 @@
       }
 
       // Start polling
-      setInterval(poll, 500);
+      setInterval(poll, 200);
       poll();
 
       // Add some visual enhancements
