@@ -26,6 +26,12 @@
         box-sizing: border-box;
       }
 
+      .config-note {
+        color: var(--text-secondary);
+        font-size: 12px;
+        margin: 0 0 12px 0;
+      }
+
       body {
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         margin: 0;
@@ -345,39 +351,16 @@
         <div class="card">
           <h3>⚙️ Configuration</h3>
           <form>
-            <div class="form-group">
-              <label for="title">Window Title</label>
-              <input id="title" type="text" value="Brighter Shores" placeholder="Game window title" />
-            </div>
+            <p class="config-note">Window: Brighter Shores (fixed)</p>
 
             <div class="form-group">
               <label for="monster_id">Monster Profile</label>
-              <input id="monster_id" type="text" value="wendigo" placeholder="Monster id (e.g., wendigo)" />
+              <select id="monster_id"></select>
             </div>
 
             <div class="form-group">
               <label for="interface_id">Interface Profile</label>
-              <input id="interface_id" type="text" value="combat" placeholder="Interface id (e.g., combat)" />
-            </div>
-
-            <div class="form-group">
-              <label for="word">Detection Target</label>
-              <input id="word" type="text" value="Wendigo" placeholder="Word to detect" />
-            </div>
-
-            <div class="form-group">
-              <label for="prefix_word">Prefix Word (Optional)</label>
-              <input id="prefix_word" type="text" placeholder="Twisted" />
-            </div>
-
-            <div class="form-group">
-              <label for="template">Template Path (Optional)</label>
-              <input id="template" type="text" placeholder="assets/templates/wendigo.png" />
-            </div>
-
-            <div class="form-group">
-              <label for="tess">Tesseract Path (Optional)</label>
-              <input id="tess" type="text" placeholder="C:\Program Files\Tesseract-OCR\tesseract.exe" />
+              <select id="interface_id"></select>
             </div>
 
             <div class="form-group">
@@ -432,25 +415,52 @@
 
     <script>
       const $ = (id) => document.getElementById(id);
+      let currentTitle = 'Brighter Shores';
 
       // Enhanced button interactions
+      const formatOptionLabel = (item) => {
+        if (!item) return '';
+        const id = item.id || item;
+        const name = item.name || id;
+        return name === id ? name : `${name} (${id})`;
+      };
+
+      const syncSelectOptions = (select, items, currentValue) => {
+        if (!select || !Array.isArray(items)) return;
+        const normalized = items.map(it => (typeof it === 'string' ? { id: it, name: it } : it));
+        const newValues = normalized.map(it => it.id);
+        const existing = Array.from(select.options).map(opt => opt.value);
+        const mismatch = existing.length !== newValues.length || existing.some((v, idx) => v !== newValues[idx]);
+        if (mismatch) {
+          select.innerHTML = '';
+          normalized.forEach(it => {
+            const option = document.createElement('option');
+            option.value = it.id;
+            option.textContent = formatOptionLabel(it);
+            select.appendChild(option);
+          });
+        }
+        if (currentValue && select.value !== currentValue) {
+          select.value = currentValue;
+        } else if (!currentValue && select.options.length && !select.value) {
+          select.value = select.options[0].value;
+        }
+      };
+
       const start = async () => {
         const startBtn = $("start");
         startBtn.textContent = "⏳ Starting...";
         startBtn.disabled = true;
 
         try {
-            const body = {
-              title: $("title").value,
-              word: $("word").value,
-              prefix_word: $("prefix_word").value || null,
+          const body = {
+              title: currentTitle,
               monster_id: $("monster_id").value || null,
               interface_id: $("interface_id").value || null,
-              template: $("template").value || null,
-              tesseract_path: $("tess").value || null,
               method: $("method").value,
               click_mode: $("click_mode").value,
-            };
+              skill: 'combat',
+          };
 
           const response = await fetch('/api/start', {
             method: 'POST',
@@ -556,25 +566,8 @@
                 modeSelect.value = nice.click_mode;
               }
             }
-
-            if (Object.prototype.hasOwnProperty.call(nice, 'prefix_word')) {
-              const prefixInput = $("prefix_word");
-              if (prefixInput) {
-                prefixInput.value = nice.prefix_word || '';
-              }
-            }
-            if (Object.prototype.hasOwnProperty.call(nice, 'monster_id')) {
-              const monsterInput = $("monster_id");
-              if (monsterInput) {
-                monsterInput.value = nice.monster_id || '';
-              }
-            }
-            if (Object.prototype.hasOwnProperty.call(nice, 'interface_id')) {
-              const interfaceInput = $("interface_id");
-              if (interfaceInput) {
-                interfaceInput.value = nice.interface_id || '';
-              }
-            }
+            syncSelectOptions($("monster_id"), nice.monsters || [], nice.monster_id);
+            syncSelectOptions($("interface_id"), nice.interfaces || [], nice.interface_id);
           }
 
           // Update preview with cache busting
@@ -654,3 +647,6 @@
     </script>
   </body>
   </html>
+            if (nice.title) {
+              currentTitle = nice.title;
+            }

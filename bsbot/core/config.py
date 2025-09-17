@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import yaml
 
 
@@ -44,6 +44,29 @@ class Config:
     def load_interface_profile(self, interface_id: str) -> Dict[str, Any]:
         """Load an interface profile by id."""
         return self._load_config(f"interfaces/{interface_id}.yml")
+
+    def list_monster_profiles(self) -> List[Dict[str, Any]]:
+        base = self.config_dir / "monsters"
+        if not base.exists():
+            return []
+        out: List[Dict[str, Any]] = []
+        for path in sorted(base.glob("*.yml")):
+            data = self.load_monster_profile(path.stem) or {}
+            if data:
+                out.append({"id": data.get("id") or path.stem, "name": data.get("name")})
+            else:
+                out.append({"id": path.stem, "name": path.stem})
+        return out
+
+    def list_interface_profiles(self) -> List[Dict[str, Any]]:
+        base = self.config_dir / "interfaces"
+        if not base.exists():
+            return []
+        out: List[Dict[str, Any]] = []
+        for path in sorted(base.glob("*.yml")):
+            data = self.load_interface_profile(path.stem) or {}
+            out.append({"id": data.get("id") or path.stem, "name": data.get("name")})
+        return out
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load a YAML config file with environment variable overrides."""
@@ -162,3 +185,13 @@ def load_monster_profile(monster_id: str) -> Dict[str, Any]:
 def load_interface_profile(interface_id: str) -> Dict[str, Any]:
     """Convenience wrapper for interface profiles."""
     return get_config().load_interface_profile(interface_id)
+
+
+def list_monster_profiles() -> List[Dict[str, Any]]:
+    """List available monster profiles."""
+    return get_config().list_monster_profiles()
+
+
+def list_interface_profiles() -> List[Dict[str, Any]]:
+    """List available interface profiles."""
+    return get_config().list_interface_profiles()

@@ -51,6 +51,8 @@ Utilities (PowerShell)
 Configuration
 - Optional YAML config lives under `config\\` and is surfaced in UI status.
 - Loader stubs: `bsbot.core.config.load_profile()` and `load_keys()`; safe to run without files present.
+- Monster profiles live under `config/monsters/`, interface profiles under `config/interfaces/`.
+- Template and Tesseract defaults live in `config/profile.yml` (UI is read-only for these values).
 
 Hotkeys (global)
 - Ctrl+Alt+P: pause/resume runtime

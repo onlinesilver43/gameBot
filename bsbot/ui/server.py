@@ -11,7 +11,7 @@ import traceback
 from bsbot.runtime.service import DetectorRuntime
 from bsbot.ui.hotkeys import HotkeyManager
 from bsbot.core.logging import init_logging
-from bsbot.core.config import load_profile, load_keys
+from bsbot.core.config import load_profile, load_keys, list_monster_profiles, list_interface_profiles
 
 
 def create_app() -> Flask:
@@ -34,9 +34,9 @@ def create_app() -> Flask:
     def api_start():
         data: Dict[str, Any] = request.get_json(force=True, silent=True) or {}
         title = data.get("title") or "Brighter Shores"
-        word = data.get("word") or "Wendigo"
-        template = data.get("template") or None
-        tess = data.get("tesseract_path") or None
+        word = data.get("word")
+        template = data.get("template") if "template" in data else None
+        tess = data.get("tesseract_path") if "tesseract_path" in data else None
         method = data.get("method") or "auto"
         click_mode = data.get("click_mode") or "dry_run"
         prefix_word = data.get("prefix_word") if "prefix_word" in data else None
@@ -53,7 +53,6 @@ def create_app() -> Flask:
             roi = None
         rt.start(
             title=title,
-            word=word,
             prefix_word=prefix_word,
             template_path=template,
             tesseract_path=tess,
@@ -65,10 +64,10 @@ def create_app() -> Flask:
             interface_id=interface_id,
         )
         logger.info(
-            "api/start | title=%s word=%s template=%s method=%s click_mode=%s skill=%s",
+            "api/start | title=%s monster=%s interface=%s method=%s click_mode=%s skill=%s",
             title,
-            word,
-            template,
+            monster_id or rt.status.monster_id,
+            interface_id or rt.status.interface_id,
             method,
             click_mode,
             skill or rt.status.skill,
@@ -115,6 +114,8 @@ def create_app() -> Flask:
             # Include config values when available
             "profile": profile_config,
             "keys": keys_config,
+            "monsters": list_monster_profiles(),
+            "interfaces": list_interface_profiles(),
         }
         return jsonify(out)
 
@@ -183,6 +184,7 @@ def _toggle_pause(rt: DetectorRuntime, logger: logging.Logger):
             click_mode=s.click_mode,
             skill=s.skill,
             monster_id=s.monster_id,
+            interface_id=s.interface_id,
         )
         logger.info("hotkey: resume/start")
 

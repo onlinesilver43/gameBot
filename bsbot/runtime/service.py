@@ -11,6 +11,7 @@ import os
 from bsbot.platform.win32 import window as win
 from bsbot.platform import capture
 from bsbot.core.logging import init_logging
+from bsbot.core.config import load_profile, load_monster_profile, load_interface_profile
 from bsbot.skills.base import FrameContext, SkillController
 from bsbot.skills.combat import CombatController
 
@@ -41,8 +42,29 @@ class DetectorRuntime:
     def __init__(self) -> None:
         self.logger = init_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
         self.status = DetectionStatus()
-        # pick up TESSERACT_PATH default if present
-        self.status.tesseract_path = os.environ.get("TESSERACT_PATH") or None
+        profile = load_profile() or {}
+        self.status.title = profile.get("window_title", self.status.title)
+        default_template = profile.get("default_template_path")
+        if default_template:
+            self.status.template_path = default_template
+        tess_from_profile = profile.get("tesseract_path")
+        # pick up TESSERACT_PATH environment fallback
+        env_tesseract = os.environ.get("TESSERACT_PATH")
+        self.status.tesseract_path = tess_from_profile or env_tesseract or self.status.tesseract_path
+        self.status.monster_id = profile.get("default_monster", self.status.monster_id)
+        self.status.interface_id = profile.get("default_interface", self.status.interface_id)
+        monster_defaults = load_monster_profile(self.status.monster_id) or {}
+        if monster_defaults.get("word"):
+            self.status.word = monster_defaults["word"]
+        self.status.prefix_word = monster_defaults.get("prefix")
+        if not self.status.template_path:
+            template_from_monster = monster_defaults.get("template")
+            if template_from_monster:
+                self.status.template_path = template_from_monster
+        interface_defaults = load_interface_profile(self.status.interface_id) or {}
+        # Additional interface-specific defaults (future use) can be applied here
+        if self.status.tesseract_path is None:
+            self.status.tesseract_path = env_tesseract
         self._thread: Optional[threading.Thread] = None
         self._stop_evt = threading.Event()
         self._lock = threading.Lock()
@@ -122,21 +144,32 @@ class DetectorRuntime:
             if self.status.running:
                 # Update parameters while running
                 if title: self.status.title = title
-                if word: self.status.word = word
+                if word is not None:
+                    self.status.word = word
                 if prefix_word is not None:
                     self.status.prefix_word = prefix_word or None
-                if template_path: self.status.template_path = template_path
-                if tesseract_path: self.status.tesseract_path = tesseract_path
+                if template_path is not None:
+                    self.status.template_path = template_path or None
+                if tesseract_path is not None:
+                    self.status.tesseract_path = tesseract_path or None
                 if method: self.status.method = method
                 if roi: self.status.roi = roi
                 if click_mode in {"dry_run", "live"}:
                     self.status.click_mode = click_mode
                 self.status.paused = False
-                self.logger.info("Runtime updated | title=%s word=%s template=%s method=%s", self.status.title, self.status.word, self.status.template_path, self.status.method)
+                self.logger.info(
+                    "Runtime updated | title=%s monster=%s interface=%s method=%s click_mode=%s",
+                    self.status.title,
+                    self.status.monster_id,
+                    self.status.interface_id,
+                    self.status.method,
+                    self.status.click_mode,
+                )
                 self._get_controller().on_update_params(self._current_params())
                 return
             if title: self.status.title = title
-            if word: self.status.word = word
+            if word is not None:
+                self.status.word = word
             if prefix_word is not None:
                 self.status.prefix_word = prefix_word or None
             if monster_id:
@@ -146,8 +179,10 @@ class DetectorRuntime:
             if method: self.status.method = method
             if click_mode in {"dry_run", "live"}:
                 self.status.click_mode = click_mode
-            self.status.template_path = template_path
-            self.status.tesseract_path = tesseract_path
+            if template_path is not None:
+                self.status.template_path = template_path or None
+            if tesseract_path is not None:
+                self.status.tesseract_path = tesseract_path or None
             if roi: self.status.roi = roi
             self.status.running = True
             self.status.paused = False
@@ -157,7 +192,14 @@ class DetectorRuntime:
             self._get_controller().on_start(self._current_params())
             self._thread = threading.Thread(target=self._run_loop, daemon=True)
             self._thread.start()
-            self.logger.info("Runtime started | title=%s word=%s template=%s method=%s", self.status.title, self.status.word, self.status.template_path, self.status.method)
+            self.logger.info(
+                "Runtime started | title=%s monster=%s interface=%s method=%s click_mode=%s",
+                self.status.title,
+                self.status.monster_id,
+                self.status.interface_id,
+                self.status.method,
+                self.status.click_mode,
+            )
 
     def pause(self) -> None:
         with self._lock:

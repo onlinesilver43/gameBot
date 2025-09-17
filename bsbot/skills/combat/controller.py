@@ -38,12 +38,15 @@ class CombatController(SkillController):
         self._absent_counter = 0
         self._last_log_ts = 0.0
         self._last_found: Optional[bool] = None
-        self.monster_id = "wendigo"
+        self.monster_id = "twisted_wendigo"
         self.word = "Wendigo"
-        self.prefix_word: Optional[str] = None
+        self.prefix_word: Optional[str] = "Twisted"
         self.attack_word = "Attack"
         self.monster_profile: Dict[str, object] = {}
         self.interface_profile: Dict[str, object] = {}
+        self.prepare_terms: List[str] = ["prepare", "choose"]
+        self.weapon_digits: List[str] = ["1"]
+        self.special_tokens: List[str] = ["special", "attacks"]
 
     # ------------------------------------------------------------------
     def on_start(self, params: Dict[str, object] | None = None) -> None:
@@ -75,16 +78,26 @@ class CombatController(SkillController):
             prefix = monster_profile.get("prefix")
         attack = monster_profile.get("attack_word") or interface_profile.get("attack_word") or self.attack_word
 
+        template = params.get("template_path")
+        if template is None:
+            template = monster_profile.get("template") or interface_profile.get("template") or self.runtime.status.template_path
+
         self.monster_id = str(monster_id)
         self.word = str(word)
         self.prefix_word = str(prefix) if prefix else None
         self.attack_word = str(attack)
+        self.monster_profile = monster_profile
+        self.interface_profile = interface_profile
+        self.prepare_terms = list(interface_profile.get("prepare_targets", self.prepare_terms)) or ["prepare", "choose"]
+        self.weapon_digits = list(interface_profile.get("weapon_digits", self.weapon_digits)) or ["1"]
+        self.special_tokens = list(interface_profile.get("special_tokens", self.special_tokens)) or ["special", "attacks"]
 
         status = self.runtime.status
         status.monster_id = self.monster_id
         status.word = self.word
         status.prefix_word = self.prefix_word
         status.interface_id = interface_id
+        status.template_path = template
 
     def process_frame(self, frame, ctx: FrameContext) -> Tuple[Dict[str, object], Optional[bytes]]:
         status = self.runtime.status
@@ -111,7 +124,7 @@ class CombatController(SkillController):
                     method = "template"
 
         if not boxes and method in {"auto", "ocr"}:
-            boxes, best_conf = detect_word_ocr_multi(frame, target=status.word)
+            boxes, best_conf = detect_word_ocr_multi(frame, target=self.word)
             if method == "auto":
                 method = "ocr_fallback"
             else:
@@ -136,23 +149,32 @@ class CombatController(SkillController):
         prepare_panel_roi = frame[ppy:ppy + pph, ppx:ppx + ppw]
         bottom_bar_roi = frame[bby:bby + bbh, bbx:bbx + bbw]
 
-        prep_boxes1, prep_conf1 = detect_word_ocr_multi(prepare_panel_roi, target="prepare")
-        prep_boxes2, prep_conf2 = detect_word_ocr_multi(prepare_panel_roi, target="choose")
-        prepare_boxes = [
-            (ppx + bx, ppy + by, bw, bh)
-            for (bx, by, bw, bh) in prep_boxes1 + prep_boxes2
-        ]
-        prepare_conf = max(prep_conf1, prep_conf2)
+        prepare_boxes: List[Tuple[int, int, int, int]] = []
+        prepare_conf = 0.0
+        for term in self.prepare_terms:
+            term_boxes, term_conf = detect_word_ocr_multi(prepare_panel_roi, target=term)
+            if term_boxes:
+                prepare_conf = max(prepare_conf, term_conf)
+                prepare_boxes.extend((ppx + bx, ppy + by, bw, bh) for (bx, by, bw, bh) in term_boxes)
 
-        spec_boxes_local, spec_conf = detect_word_ocr_multi(bottom_bar_roi, target="special")
-        atks_boxes_local, atks_conf = detect_word_ocr_multi(bottom_bar_roi, target="attacks")
-        spec_boxes = [(bbx + bx, bby + by, bw, bh) for (bx, by, bw, bh) in spec_boxes_local]
-        atks_boxes = [(bbx + bx, bby + by, bw, bh) for (bx, by, bw, bh) in atks_boxes_local]
-        special_attacks_present = bool(spec_boxes and atks_boxes)
-        special_attacks_conf = min(spec_conf, atks_conf) if special_attacks_present else 0.0
+        spec_boxes: List[Tuple[int, int, int, int]] = []
+        atks_boxes: List[Tuple[int, int, int, int]] = []
+        special_attacks_conf = 0.0
+        if self.special_tokens:
+            spec_local, spec_conf = detect_word_ocr_multi(bottom_bar_roi, target=self.special_tokens[0])
+            spec_boxes = [(bbx + bx, bby + by, bw, bh) for (bx, by, bw, bh) in spec_local]
+            special_attacks_conf = spec_conf
+            if len(self.special_tokens) > 1:
+                atk_local, atk_conf = detect_word_ocr_multi(bottom_bar_roi, target=self.special_tokens[1])
+                atks_boxes = [(bbx + bx, bby + by, bw, bh) for (bx, by, bw, bh) in atk_local]
+                if spec_boxes and atks_boxes:
+                    special_attacks_conf = min(spec_conf, atk_conf)
+            else:
+                atks_boxes = spec_boxes
+        special_attacks_present = bool(spec_boxes) and bool(atks_boxes)
 
         weapons_roi = self._subroi(prepare_panel_roi, (0.0, 0.50, 1.0, 0.50))
-        digit_boxes_local, digit_conf = detect_digits_ocr_multi(weapons_roi, targets=("1",))
+        digit_boxes_local, digit_conf = detect_digits_ocr_multi(weapons_roi, targets=tuple(self.weapon_digits))
         wpx = ppx
         wpy = ppy + int(0.50 * pph)
         digit_boxes = [(wpx + bx, wpy + by, bw, bh) for (bx, by, bw, bh) in digit_boxes_local]

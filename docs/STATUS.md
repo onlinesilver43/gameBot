@@ -30,7 +30,7 @@ Updated: GROC5 Phase Complete - Ready for R1 Features
 - **Detection Methods**: Auto (Template→OCR), Template Only, OCR Only
 - **Real-time Monitoring**: Live status, preview, logs with professional UI
 - **Safety Controls**: Start/Pause/Stop with visual feedback and hotkeys
-- **Configuration System**: Profile, keys, and elements YAML configurations
+- **Configuration System**: Profile, keys, monster/interface YAML configurations
 - **API Endpoints**: RESTful status, control, and diagnostic endpoints
 
 ## Known Limitations (Ready for R1)

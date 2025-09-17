@@ -32,6 +32,12 @@ roi_y: 0.25
 roi_width: 0.6
 roi_height: 0.5
 
+# Profile Defaults
+default_monster: "twisted_wendigo"
+default_interface: "combat"
+default_template_path: "assets/templates/wendigo.png"
+tesseract_path: "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
+
 # Debug Settings
 debug_enabled: false
 log_level: "INFO"
