@@ -1,0 +1,79 @@
+name: Documentation Check
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'docs/**'
+      - 'bsbot/**'
+      - 'README.md'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'docs/**'
+      - 'bsbot/**'
+      - 'README.md'
+
+jobs:
+  docs-health-check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install markdown-link-check
+
+    - name: Check documentation links
+      run: |
+        find docs/ -name "*.md" -exec markdown-link-check {} \;
+
+    - name: Check Python docstrings
+      run: |
+        python -c "
+        import ast
+        import os
+
+        def check_docstrings(file_path):
+            with open(file_path, 'r') as f:
+                content = f.read()
+            try:
+                tree = ast.parse(content)
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.FunctionDef) and not node.name.startswith('_'):
+                        if not (node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Str)):
+                            print(f'No docstring: {file_path}::{node.name}')
+            except SyntaxError:
+                pass
+
+        for root, dirs, files in os.walk('bsbot'):
+            for file in files:
+                if file.endswith('.py'):
+                    check_docstrings(os.path.join(root, file))
+        "
+
+    - name: Check for required documentation files
+      run: |
+        required_files=('README.md' 'docs/ARCHITECTURE.md' 'docs/TASKS.md' 'docs/AGENTS.md')
+        for file in \"${required_files[@]}\"; do
+          if [ ! -f \"$file\" ]; then
+            echo \"❌ Missing required file: $file\"
+            exit 1
+          fi
+        done
+        echo \"✅ All required documentation files present\"
+
+    - name: Validate documentation structure
+      run: |
+        # Check for empty documentation files
+        find docs/ -name "*.md" -size 0 -exec echo \"❌ Empty file: {}\" \; -quit || true
+
+        # Check for files without headers
+        find docs/ -name "*.md" -exec sh -c 'if ! head -1 \"$1\" | grep -q "^#"; then echo \"⚠️  No header in: $1\"; fi' _ {} \;

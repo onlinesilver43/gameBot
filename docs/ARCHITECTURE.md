@@ -22,6 +22,7 @@ The Brighter Shores bot is a Windows-only, screen-driven automation framework. T
   - `server.py` — Flask server exposing `/api/start|pause|stop`, `/api/status`, `/api/preview.jpg`, diagnostics, and timeline endpoints.
   - `templates/index.html` — Modern UI with configuration form, live preview, logs, timeline, and click-mode selector.
     - Phase tracker badge mirrors the combat controller’s human-readable phase list, and both the timeline and activity logs highlight those labels alongside the raw FSM state for quick scanning.
+    - Preview frames are downscaled (default 0.75×) and encoded at reduced quality for responsiveness; `BSBOT_PREVIEW_SCALE` / `BSBOT_PREVIEW_QUALITY` tune this without touching the detection pipeline.
   - `hotkeys.py` — Global hotkeys (Ctrl+Alt+P Pause/Resume, Ctrl+Alt+O Kill) using `keyboard` or Win32 fallback.
 - CLI Utilities (`bsbot/main.py` & scripts)
   - PowerShell scripts under `scripts/` bootstrap the venv, run the server, capture tests, and template extraction.
@@ -100,6 +101,17 @@ The Brighter Shores bot is a Windows-only, screen-driven automation framework. T
 - UI & timeline semantics
   - The UI shows a live phase badge from `/api/status.phase` and highlights `phase=` in the Activity Logs. Timeline lines include the human-readable `phase` when available.
   - Transition events now carry `notes` (e.g., why we bailed from a phase), and `/api/status.last_result` surfaces breadcrumbs: `target_lock` (active/remaining), `click_attempts`, `confidence_history`, and the most recent `transition_reason`.
+
+### Tile & Navigation Roadmap
+
+- **Compass normalisation** — Runtime will auto-rotate the camera until the compass needle points North. Any drift pauses detection, re-aligns, and resumes to keep the tile grid stable.
+- **Screen tile calibration** — Helpers to translate between screen pixels and tile coordinates let every detection be expressed in grid space (row/column + sub-tile offset).
+- **Monster tracker** — Each monster receives a short-lived track that stores its tile position, movement vector (Chebyshev neighbours), confidence, and cached ROI. Predictions fill small OCR gaps without reprocessing the entire frame.
+- **Hover + floating cue confirmation** — When a track enters an adjacent tile we hover it, confirm the floating **Attack** text via a micro OCR pass, then proceed to context-menu buttons anchored to that tile. This eliminates false positives on the floating label.
+- **Minimap anchoring** — Opening the minimap yields absolute tile coordinates and static POIs (trees, portal stones). We will capture these values, close the minimap, and feed them into the tracker for navigation and skilling features.
+- **Telemetry & docs** — Tracker state (`tile`, velocity, predicted move) will be surfaced via `/api/status` and the timeline. The roadmap is tracked as tasks R1-5 through R1-11 in `docs/TASKS.md`.
+
+These enhancements keep combat responsive today and establish the shared infrastructure we need for future skills (harvesting, navigation, automation).
 
 ## Safety & Controls
 

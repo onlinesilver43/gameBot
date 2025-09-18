@@ -11,6 +11,7 @@ This repository is designed for collaboration between multiple AI agents (e.g., 
 - Design decisions: append entries to `docs/DECISIONS.md` (date, context, decision, consequences).
 - Status updates: `docs/STATUS.md` (short, current, human-readable).
 - Architecture reference: `docs/ARCHITECTURE.md` (keep in sync with implementation).
+- Session recap: append a row to the **Agent Activity Log** (see below) detailing scope, touched files, and hand-off notes before ending a run.
 
 ## Task Lifecycle
 1. Create/Update a task in `docs/TASKS.md` with:
@@ -40,6 +41,17 @@ This repository is designed for collaboration between multiple AI agents (e.g., 
 ## Communication Notes
 - Write messages in tasks using explicit prefixes if helpful: `CODEX:` or `GROC5:`
 - Keep comments short and action-oriented.
+
+## Agent Activity Log
+
+| date (UTC) | agent | focus | key changes | next steps |
+|---|---|---|---|---|
+| _fill on every session_ | | | | |
+
+**How to use**
+1. When you start, skim the previous entry to understand context.
+2. When you finish, add a new row summarising what you did (link to tasks, PRs, or docs) and list explicit hand-off bullets.
+3. Keep this table concise; detailed change history belongs in `docs/CHANGELOG.md` and Git commits.
 
 ## Safety & Scope
 - Screen-based only (no memory reads).
