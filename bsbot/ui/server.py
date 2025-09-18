@@ -107,6 +107,7 @@ def create_app() -> Flask:
             "prefix_word": s.prefix_word,
             "monster_id": s.monster_id,
             "interface_id": s.interface_id,
+            "phase": getattr(s, "phase", None),
             "template": s.template_path,
             "method": s.method,
             "click_mode": s.click_mode,

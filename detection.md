@@ -2,6 +2,27 @@
 
 Combat detection now lives inside a dedicated skill controller (`bsbot.skills.combat.controller.CombatController`) that drives the OCR-first pipeline, state machine, and planned clicks. Optional monster profiles (e.g., prefix filtering) let us target variants like Twisted Wendigo. The `DetectorRuntime` orchestrator spins the capture loop, delegates each frame to the active skill, and records timeline events while keeping reusable services (capture, logging, human-like clicking) in shared layers.
 
+## R1 Development Patterns (Current Scope)
+
+- OCR‑only focus
+  - Runs cleanly without templates; template detection can be configured per profile but is not required for R1.
+
+- Variant gating and merged nameplate
+  - When a `prefix_word` (e.g., "Twisted") is configured alongside `word` (e.g., "Wendigo"), we only emit `detect|nameplate` when both tokens are present.
+  - The two OCR boxes are merged into one consolidated box for a single nameplate event; separate `name_prefix` events are suppressed in this mode. The merged box is cached with a ~1.2s grace period so we can keep working even if the prefix disappears after the first click.
+
+- Enabled phases and events
+  - Enabled: nameplate detection and attack button detection, plus their corresponding clicks (`click|prime_nameplate`, `click|attack_button`).
+  - Suppressed for now: prepare/weapon/special detections and events, until those phases are implemented and verified.
+
+- Confirm-then-advance
+  - In PrimeTarget, re-click the nameplate (with cooldown) until the attack button appears.
+  - In AttackPanel, re-click the attack button while it remains visible; only move on when it disappears.
+  - This pattern will be extended to Prepare → Weapon → BattleLoop when enabled.
+
+- Debug breadcrumbs
+  - Transition events include `notes` (reason strings), and the status payload exposes `target_lock`, `click_attempts`, `confidence_history`, and `transition_reason` so UI/log surfaces can show why the controller advanced or bailed on a phase.
+
 ## bsbot/skills/combat/controller.py
 ```python
 from __future__ import annotations

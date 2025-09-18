@@ -21,6 +21,7 @@ The Brighter Shores bot is a Windows-only, screen-driven automation framework. T
 - Control & Observability (`bsbot/ui/`)
   - `server.py` — Flask server exposing `/api/start|pause|stop`, `/api/status`, `/api/preview.jpg`, diagnostics, and timeline endpoints.
   - `templates/index.html` — Modern UI with configuration form, live preview, logs, timeline, and click-mode selector.
+    - Phase tracker badge mirrors the combat controller’s human-readable phase list, and both the timeline and activity logs highlight those labels alongside the raw FSM state for quick scanning.
   - `hotkeys.py` — Global hotkeys (Ctrl+Alt+P Pause/Resume, Ctrl+Alt+O Kill) using `keyboard` or Win32 fallback.
 - CLI Utilities (`bsbot/main.py` & scripts)
   - PowerShell scripts under `scripts/` bootstrap the venv, run the server, capture tests, and template extraction.
@@ -53,7 +54,52 @@ The Brighter Shores bot is a Windows-only, screen-driven automation framework. T
 3. Build a `FrameContext` and dispatch to the active `SkillController` (combat by default).
 4. Skill returns detection result JSON and an annotated preview.
 5. Runtime updates shared status, logs timeline events, and, when in live mode, plays back scheduled human-like clicks.
-6. Sleep ~300 ms and repeat until paused or stopped.
+6. Sleep ~100 ms by default (configurable via `BSBOT_LOOP_SLEEP`) and repeat until paused or stopped.
+
+### State Machines & Events
+
+- `CombatController` implements a six-state FSM that mirrors the combat sequence:
+  1. **Scan** — “Search for Monster”. Emit `detect|nameplate` and (if configured) `detect|name_prefix` when OCR sees the target words.
+  2. **PrimeTarget** — “Click on the Monster”. When ready, we emit `click|prime_nameplate` (dry-run or live) and await the attack button.
+  3. **AttackPanel** — “Detect the Attack Box” / “Click the Attack Box”. Events `detect|attack_button` and `click|attack_button` fire here.
+  4. **Prepare** — “Detect the Prepare for Battle box”. Emits `detect|prepare_header` while monitoring for the weapon slot.
+  5. **Weapon** — “Detect/Click the Weapon box”. Events `detect|weapon_slot_1` and `click|weapon_1` advance the FSM.
+  6. **BattleLoop** — “Detect fight started/completed”. Confirmation `confirm|special_attacks` signals the fight is active; absence of those cues triggers `transition|battle_end` and returns to Scan.
+
+- Event types the runtime records:
+  - `detect` — raw detections (`nameplate`, `name_prefix`, `attack_button`, `prepare_header`, `weapon_slot_1`).
+  - `confirm` — secondary confirmations (`special_attacks`).
+  - `click` — scheduled or executed clicks (`prime_nameplate`, `attack_button`, `weapon_1`).
+  - `transition` — FSM transitions (`Scan->PrimeTarget`, `battle_end`, etc.).
+
+### Activity Logs & Timeline
+
+- **Activity Logs** (`/api/logs/tail`) mirror the logger output: detection summaries (`detect | found=True ...`), click cooldown skips, and transition notes. They provide the narrative context behind the raw events.
+- **Event Timeline** (`/api/timeline`) streams the structured events listed above. Each entry includes timestamp, FSM state, event type, cue label, confidence, and any click coordinates.
+- Together they trace every phase of the combat sequence: Scan emits nameplate/name_prefix, PrimeTarget adds click events, AttackPanel/Prepare/Weapon show the subsequent detections and clicks, and BattleLoop ends with a `transition|battle_end` when cues disappear.
+
+### Development Patterns (R1 Focus)
+
+- Canonical phases
+  - The combat controller maintains human‑readable phase labels (e.g., "Search for Monster", "Click on the Monster").
+  - Each event carries both the raw FSM `state` and the human‑readable `phase`. The status API also exposes `phase` for the UI badge.
+
+- Current scope (enabled detections)
+  - Nameplate and Attack are active. Prepare/Weapon/Special phases are intentionally suppressed until implemented; no events are emitted for them.
+  - OCR‑only operation is supported; template mode can be enabled per profile but is not required.
+
+- Variant gating and merged nameplate
+  - When a `prefix_word` is configured (e.g., "Twisted") and the main `word` (e.g., "Wendigo"), the controller requires both tokens before treating the target as ready.
+  - When both tokens are detected, their OCR boxes are merged into a single consolidated nameplate box and emitted as `detect|nameplate` (no separate `name_prefix` event). That box is cached with a 1.2s lock grace so the bot can continue operating if the prefix vanishes when the context menu appears.
+
+- Confirm-then-advance pattern
+  - PrimeTarget: re-click the nameplate at a safe cooldown while the nameplate persists and the Attack button is not yet visible.
+  - AttackPanel: after clicking, keep re-clicking the Attack button (cooldown) while it remains visible; only advance once it disappears or the next cue is confirmed. Click attempt counters reset when a scan cycle restarts.
+  - This pattern will be applied to downstream phases (Prepare → Weapon → BattleLoop) when they are enabled.
+
+- UI & timeline semantics
+  - The UI shows a live phase badge from `/api/status.phase` and highlights `phase=` in the Activity Logs. Timeline lines include the human-readable `phase` when available.
+  - Transition events now carry `notes` (e.g., why we bailed from a phase), and `/api/status.last_result` surfaces breadcrumbs: `target_lock` (active/remaining), `click_attempts`, `confidence_history`, and the most recent `transition_reason`.
 
 ## Safety & Controls
 

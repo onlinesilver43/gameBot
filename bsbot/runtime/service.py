@@ -32,6 +32,7 @@ class DetectionStatus:
     skill: str = "combat"
     monster_id: str = "twisted_wendigo"
     interface_id: str = "combat"
+    phase: str = "Search for Monster"
     # Relative ROI (x,y,w,h) over the game client area.
     # Use full window by default to cover the whole app screen.
     roi: Tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
@@ -62,14 +63,15 @@ class DetectorRuntime:
             if template_from_monster:
                 self.status.template_path = template_from_monster
         interface_defaults = load_interface_profile(self.status.interface_id) or {}
-        # Additional interface-specific defaults (future use) can be applied here
         if self.status.tesseract_path is None:
             self.status.tesseract_path = env_tesseract
+        self.status.phase = "Search for Monster"
         self._thread: Optional[threading.Thread] = None
         self._stop_evt = threading.Event()
         self._lock = threading.Lock()
         # State/timeline
         self._state = "Scan"
+        self._phase = self.status.phase
         self._events: list[dict] = []
         # Skill management
         self._skills: Dict[str, SkillController] = {}
@@ -82,7 +84,12 @@ class DetectorRuntime:
         self._click_move_duration = 0.16
         self._click_down_delay = 0.05
         self._recent_clicks: List[Dict[str, Any]] = []
-        self._loop_sleep = 0.2
+        default_loop_sleep = 0.1
+        try:
+            env_loop = os.environ.get("BSBOT_LOOP_SLEEP")
+            self._loop_sleep = float(env_loop) if env_loop else default_loop_sleep
+        except (TypeError, ValueError):
+            self._loop_sleep = default_loop_sleep
         self._register_default_skills()
 
     def _register_default_skills(self) -> None:
@@ -275,8 +282,20 @@ class DetectorRuntime:
     def set_state(self, new_state: str) -> None:
         self._state = new_state
 
-    def emit_click(self, planned: List[Tuple[int, int, str]], label: str, *, state: Optional[str] = None) -> None:
+    def set_phase(self, phase: str) -> None:
+        self._phase = phase
+        self.status.phase = phase
+
+    def emit_click(
+        self,
+        planned: List[Tuple[int, int, str]],
+        label: str,
+        *,
+        state: Optional[str] = None,
+        phase: Optional[str] = None,
+    ) -> None:
         st = state or self._state
+        ph = phase or self._phase
         for entry in planned:
             if len(entry) != 3:
                 continue
@@ -292,6 +311,7 @@ class DetectorRuntime:
                     0.0,
                     click={"x": int(cx), "y": int(cy), "mode": self.status.click_mode},
                     state=st,
+                    phase=ph,
                 )
                 self._record_recent_click(int(cx), int(cy), lbl)
                 break
@@ -307,11 +327,14 @@ class DetectorRuntime:
         click: Optional[Dict[str, Any]] = None,
         notes: Optional[str] = None,
         state: Optional[str] = None,
+        phase: Optional[str] = None,
     ) -> None:
         st = state or self._state
+        ph = phase or self._phase
         evt = {
             "ts": datetime.utcnow().isoformat(timespec="milliseconds") + "Z",
             "state": st,
+            "phase": ph,
             "type": etype,
             "label": label,
             "roi": roi,

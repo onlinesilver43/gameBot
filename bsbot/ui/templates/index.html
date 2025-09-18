@@ -26,6 +26,17 @@
         box-sizing: border-box;
       }
 
+      .phase-badge {
+        display: inline-block;
+        padding: 6px 12px;
+        margin-bottom: 12px;
+        background: var(--accent-color);
+        color: var(--primary-bg);
+        border-radius: 999px;
+        font-weight: 600;
+        font-size: 13px;
+      }
+
       .config-note {
         color: var(--text-secondary);
         font-size: 12px;
@@ -230,6 +241,11 @@
         background-size: 100% 20px;
       }
 
+      .logs-panel .log-phase {
+        color: var(--accent-color);
+        font-weight: 600;
+      }
+
       .status-indicator {
         display: inline-block;
         width: 8px;
@@ -352,6 +368,7 @@
           <h3>⚙️ Configuration</h3>
           <form>
             <p class="config-note">Window: Brighter Shores (fixed)</p>
+            <div id="phase_badge" class="phase-badge"></div>
 
             <div class="form-group">
               <label for="monster_id">Monster Profile</label>
@@ -415,7 +432,38 @@
 
     <script>
       const $ = (id) => document.getElementById(id);
+      const phaseBadge = document.getElementById('phase_badge');
       let currentTitle = 'Brighter Shores';
+      let currentPhase = 'Search for Monster';
+
+      const updatePhaseBadge = (phase, reason = '') => {
+        if (!phaseBadge) return;
+        const label = phase || 'Idle';
+        phaseBadge.textContent = label;
+        phaseBadge.title = reason
+          ? `Current Phase: ${label}\nLast transition: ${reason}`
+          : `Current Phase: ${label}`;
+      };
+
+      const escapeHtml = (str = '') =>
+        str
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+
+      const formatLogs = (text = '') => {
+        const lines = text.split(/\r?\n/);
+        return lines
+          .map((line) => {
+            if (!line.trim()) return '';
+            let html = escapeHtml(line);
+            html = html.replace(/phase=([^|]+?)(?=\s\||$)/i, (_m, p1) => `phase=<span class="log-phase">${escapeHtml(p1.trim())}</span>`);
+            return html;
+          })
+          .join('<br/>');
+      };
 
       // Enhanced button interactions
       const formatOptionLabel = (item) => {
@@ -535,7 +583,7 @@
             }
 
             // Update status with syntax highlighting
-            const formattedStatus = JSON.stringify(nice, null, 2)
+          const formattedStatus = JSON.stringify(nice, null, 2)
               .replace(/"running":\s*(true|false)/g, '"running": <span class="status-$1">$1</span>')
               .replace(/"paused":\s*(true|false)/g, '"paused": <span class="status-$1">$1</span>');
 
@@ -566,6 +614,25 @@
                 modeSelect.value = nice.click_mode;
               }
             }
+
+            if (typeof nice.title === 'string' && nice.title) {
+              currentTitle = nice.title;
+            }
+
+            let nextPhase = null;
+            if (typeof nice.phase === 'string' && nice.phase) {
+              nextPhase = nice.phase;
+            } else if (nice.last_result && typeof nice.last_result.phase === 'string') {
+              nextPhase = nice.last_result.phase;
+            }
+            if (nextPhase) {
+              currentPhase = nextPhase;
+            }
+            const transitionReason = nice.last_result && typeof nice.last_result.transition_reason === 'string'
+              ? nice.last_result.transition_reason
+              : '';
+            updatePhaseBadge(currentPhase, transitionReason);
+
             syncSelectOptions($("monster_id"), nice.monsters || [], nice.monster_id);
             syncSelectOptions($("interface_id"), nice.interfaces || [], nice.interface_id);
           }
@@ -583,7 +650,7 @@
           if (logsResponse.ok) {
             const logsText = await logsResponse.text();
             const logsDiv = $("logs");
-            logsDiv.textContent = logsText;
+            logsDiv.innerHTML = formatLogs(logsText);
             logsDiv.scrollTop = logsDiv.scrollHeight;
           }
         } catch (e) {
@@ -593,16 +660,18 @@
         // Timeline polling
         try {
           const tlRes = await fetch('/api/timeline');
-          if (tlRes.ok) {
+         if (tlRes.ok) {
             const items = await tlRes.json();
             const lines = items.map(it => {
               const parts = [];
               parts.push(it.ts);
-              parts.push(it.state);
+              const phaseLabel = it.phase || it.state || '';
+              if (phaseLabel) parts.push(phaseLabel.toUpperCase());
               parts.push(it.type);
               parts.push(it.label);
               if (typeof it.best_conf === 'number') parts.push(`conf=${it.best_conf.toFixed(3)}`);
               if (it.click) parts.push(`click=(${it.click.x},${it.click.y})`);
+              if (it.notes) parts.push(it.notes);
               return parts.join(' | ');
             });
             const tlDiv = $("timeline");
@@ -617,8 +686,11 @@
       }
 
       // Start polling
-      setInterval(poll, 200);
+      setInterval(poll, 120);
       poll();
+
+      // Initialize badge immediately
+      updatePhaseBadge(currentPhase);
 
       // Add some visual enhancements
       document.addEventListener('DOMContentLoaded', function() {
@@ -646,7 +718,4 @@
       });
     </script>
   </body>
-  </html>
-            if (nice.title) {
-              currentTitle = nice.title;
-            }
+</html>
