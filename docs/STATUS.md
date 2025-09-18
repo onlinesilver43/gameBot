@@ -1,6 +1,6 @@
 # Current Status
 
-Updated: GROC5 Phase Complete - Ready for R1 Features
+Updated: Tile-aware detection groundwork in progress
 
 ## Executive Summary
 **GROC5 Implementation Phase Successfully Completed**
@@ -33,11 +33,11 @@ Updated: GROC5 Phase Complete - Ready for R1 Features
 - **Configuration System**: Profile, keys, monster/interface YAML configurations
 - **API Endpoints**: RESTful status, control, and diagnostic endpoints
 
-## Known Limitations (Ready for R1)
-- No input automation yet (by design - pending dry-run validation)
-- Static ROI configuration (needs dynamic UI editor)
-- No combat automation behaviors (pending R1-1)
-- No waypoint navigation (pending R1-3)
+## Known Limitations (Current Focus)
+- Compass not yet auto-normalised; camera rotation still manual.
+- Tile tracker + hover workflow under development (see tasks R1-5 → R1-9).
+- Minimap anchoring and global navigation pending (R1-10).
+- Input driver still in design stage (R1-2).
 
 ## Performance Metrics
 - **Detection Accuracy**: Template detection with NMS deduplication
@@ -63,27 +63,18 @@ scripts\serve.ps1 -Port 8083 -LogLevel INFO
 - ✅ **Version Control**: All changes committed with detailed messages
 - ✅ **Code Review Ready**: Clean, well-structured, production-ready code
 
-## Next Phase Readiness (R1)
-**Ready for Codex assignment of R1 tasks:**
-- R1-1: Combat dry-run click simulator
-- R1-2: Input driver (safe)
-- R1-3: Combat engage loop
-- R1-4: Loot pickup automation
+## Next Phase Readiness
+- Execute the Detection & Navigation roadmap (R1-5 … R1-11) to deliver tile-aware combat.
+- Coordinate with Groc5fast on input driver + loot pickup once tile tracking stabilises.
 
 ## Combat Detection Phase Plan
-- **Search For Monster** — ROI scanning + OCR/template fallback active 🔄 (untested)
-- **Detect Monster Nameplate** — Wendigo OCR/templating confirmed, timeline logs ✅
-- **Variant Filtering** — Optional prefix OCR (e.g., "Twisted") gates target selection 🔄 (needs validation)
-- **Click Monster** — Human click driver wired; needs validation 🔄
-- **Detect Attack Box** — Attack OCR in combat ROI, confidence logged ✅
-- **Click Attack Box** — Human click driver wired; needs validation 🔄
-- **Detect Prepare Box** — Prepare/Choose OCR signals coded, needs validation 🔄
-- **Detect Weapon Box** — Weapon digit OCR (slot 1) coded, needs validation 🔄
-- **Click Weapon Box** — Human click driver wired; needs validation 🔄
-- **Detect Fight Started** — HUD token check coded, needs validation 🔄
-- **Detect Fight Complete** — Absence counter coded, needs validation 🔄
-- **Reset To Search** — FSM recovery path returns to scanning 🔄 (untested)
-- **Preview Enhancements** — Faster polling + live click overlay to mirror bot actions 🔄 (needs field verification)
+- **Compass Normalisation** — R1-5
+- **Screen Tile Calibration** — R1-6
+- **Tile Tracker Prototype** — R1-7
+- **Hover + Floating Attack Confirmation** — R1-8
+- **Context Menu ROI Refinement** — R1-9
+- **Minimap Anchoring & Navigation Hooks** — R1-10
+- **Telemetry + Documentation** — R1-11
 
 ## Final Status
 **GROC5 Implementation Phase: COMPLETE ✅**

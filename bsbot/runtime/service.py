@@ -33,6 +33,10 @@ class DetectionStatus:
     monster_id: str = "twisted_wendigo"
     interface_id: str = "combat"
     phase: str = "Search for Monster"
+    tile_size_px: Optional[float] = None
+    tile_origin_px: Tuple[float, float] = (0.0, 0.0)
+    player_tile_offset: Tuple[float, float] = (0.5, 0.5)
+    compass_auto_align: bool = False
     # Relative ROI (x,y,w,h) over the game client area.
     # Use full window by default to cover the whole app screen.
     roi: Tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
@@ -65,6 +69,21 @@ class DetectorRuntime:
         interface_defaults = load_interface_profile(self.status.interface_id) or {}
         if self.status.tesseract_path is None:
             self.status.tesseract_path = env_tesseract
+        tile_size = profile.get("tile_size_px")
+        if tile_size:
+            try:
+                self.status.tile_size_px = float(tile_size)
+            except (TypeError, ValueError):
+                self.status.tile_size_px = None
+        origin = profile.get("tile_origin_px") or [0, 0]
+        if isinstance(origin, (list, tuple)) and len(origin) == 2:
+            self.status.tile_origin_px = (float(origin[0]), float(origin[1]))
+        player_off = profile.get("player_tile_offset") or [0.5, 0.5]
+        if isinstance(player_off, (list, tuple)) and len(player_off) == 2:
+            self.status.player_tile_offset = (float(player_off[0]), float(player_off[1]))
+        compass_auto = profile.get("compass_auto_align")
+        if isinstance(compass_auto, bool):
+            self.status.compass_auto_align = compass_auto
         self.status.phase = "Search for Monster"
         self._thread: Optional[threading.Thread] = None
         self._stop_evt = threading.Event()
@@ -119,6 +138,9 @@ class DetectorRuntime:
             "method": self.status.method,
             "roi": self.status.roi,
             "click_mode": self.status.click_mode,
+            "tile_size_px": self.status.tile_size_px,
+            "tile_origin_px": self.status.tile_origin_px,
+            "player_tile_offset": self.status.player_tile_offset,
         }
 
     def start(

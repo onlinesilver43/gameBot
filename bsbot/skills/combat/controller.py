@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from difflib import SequenceMatcher
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+import pytesseract
 
 from bsbot.skills.base import FrameContext, SkillController
 from bsbot.core.config import load_monster_profile, load_interface_profile
+from bsbot.tracking import TileGrid, TileTracker
 from bsbot.vision.detect import (
     configure_tesseract,
     detect_digits_ocr_multi,
@@ -86,6 +89,14 @@ class CombatController(SkillController):
         self.special_tokens: List[str] = ["special", "attacks"]
         self.current_phase: str = PHASE_STATE_DEFAULTS["Scan"]
         self.runtime.set_phase(self.current_phase)
+        self._tile_size_px: Optional[float] = None
+        self._tile_origin_px: Tuple[float, float] = (0.0, 0.0)
+        self._player_tile_offset: Tuple[float, float] = (0.5, 0.5)
+        self._tile_grid: Optional[TileGrid] = None
+        self._grid_signature: Optional[Tuple[int, int, int, int]] = None
+        self._tile_tracker = TileTracker()
+        self._player_tile: Tuple[int, int] = (0, 0)
+        self._last_tracked_tile: Optional[Tuple[int, int]] = None
         self._target_lock_grace = 1.2  # seconds to keep target locked after prefix disappears
         self._target_lock_until = 0.0
         self._locked_box: Optional[Tuple[int, int, int, int]] = None
@@ -117,11 +128,19 @@ class CombatController(SkillController):
         self._apply_params(params or {})
         self.runtime.set_state(self._state)
         self._set_phase(PHASE_STATE_DEFAULTS["Scan"])
+        self._tile_grid = None
+        self._grid_signature = None
+        self._tile_tracker.clear()
+        self._last_tracked_tile = None
 
     def on_stop(self) -> None:
         self._state = "Scan"
         self.runtime.set_state(self._state)
         self._set_phase(PHASE_STATE_DEFAULTS["Scan"])
+        self._tile_grid = None
+        self._grid_signature = None
+        self._tile_tracker.clear()
+        self._last_tracked_tile = None
 
     def on_update_params(self, params: Dict[str, object] | None = None) -> None:
         if params:
@@ -143,6 +162,22 @@ class CombatController(SkillController):
         template = params.get("template_path")
         if template is None:
             template = monster_profile.get("template") or interface_profile.get("template") or self.runtime.status.template_path
+
+        tile_size = params.get("tile_size_px")
+        if tile_size is None:
+            tile_size = self.runtime.status.tile_size_px
+        try:
+            self._tile_size_px = float(tile_size) if tile_size else None
+        except (TypeError, ValueError):
+            self._tile_size_px = None
+
+        tile_origin = params.get("tile_origin_px") or self.runtime.status.tile_origin_px
+        if isinstance(tile_origin, (list, tuple)) and len(tile_origin) == 2:
+            self._tile_origin_px = (float(tile_origin[0]), float(tile_origin[1]))
+
+        player_offset = params.get("player_tile_offset") or self.runtime.status.player_tile_offset
+        if isinstance(player_offset, (list, tuple)) and len(player_offset) == 2:
+            self._player_tile_offset = (float(player_offset[0]), float(player_offset[1]))
 
         self.monster_id = str(monster_id)
         self.word = str(word)
@@ -277,6 +312,65 @@ class CombatController(SkillController):
 
         target_ready = bool(boxes) and (not self.prefix_word or prefix_present or lock_active)
 
+        tracker_info: Optional[Dict[str, object]] = None
+        attack_context_rect: Optional[Tuple[int, int, int, int]] = None
+        if self._tile_size_px and self._tile_size_px > 0:
+            if self._tile_grid is None or self._grid_signature != (rx, ry, rw, rh):
+                self._tile_grid = TileGrid(
+                    self._tile_size_px,
+                    roi_origin=(rx, ry),
+                    tile_origin=self._tile_origin_px,
+                    hover_offset=self._player_tile_offset,
+                )
+                self._grid_signature = (rx, ry, rw, rh)
+                self._player_tile = self._tile_grid.player_tile(rw, rh)
+            grid = self._tile_grid
+            if grid:
+                timestamp = now
+                track = None
+                if boxes:
+                    bx, by, bw, bh = boxes[0]
+                    center_x = rx + bx + bw / 2
+                    center_y = ry + by + bh / 2
+                    row, col = grid.screen_to_tile(center_x, center_y)
+                    track = self._tile_tracker.update(self.monster_id, row, col, best_conf, timestamp=timestamp)
+                else:
+                    self._tile_tracker.mark_missed(self.monster_id)
+                    track = self._tile_tracker.predict(self.monster_id, timestamp=timestamp)
+                self._tile_tracker.prune()
+                if track:
+                    tracker_tile = (track.row, track.col)
+                    if tracker_tile != self._last_tracked_tile:
+                        if self._last_tracked_tile is not None:
+                            self.runtime.emit_event(
+                                "transition",
+                                "tile_move",
+                                [0, 0, 0, 0],
+                                [],
+                                0.0,
+                                state=self._state,
+                                phase=self.current_phase,
+                                notes=f"{self._last_tracked_tile}->{tracker_tile}",
+                            )
+                        self._last_tracked_tile = tracker_tile
+                    adjacent = TileGrid.is_adjacent(self._player_tile, tracker_tile)
+                    attack_context_rect = grid.context_menu_rect(track.row, track.col)
+                    tracker_info = {
+                        "row": track.row,
+                        "col": track.col,
+                        "adjacent": adjacent,
+                        "player_tile": list(self._player_tile),
+                        "confidence": track.confidence,
+                    }
+                    if attack_context_rect:
+                        ax, ay, aw, ah = attack_context_rect
+                        filtered_boxes: List[Tuple[int, int, int, int]] = []
+                        for (bx, by, bw, bh) in attack_boxes:
+                            if bx >= ax and by >= ay and (bx + bw) <= ax + aw and (by + bh) <= ay + ah:
+                                filtered_boxes.append((bx, by, bw, bh))
+                        if filtered_boxes:
+                            attack_boxes = filtered_boxes
+
         planned_clicks: List[PlannedClick] = []
         if target_ready and boxes:
             bx, by, bw, bh = boxes[0]
@@ -323,6 +417,9 @@ class CombatController(SkillController):
             cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (0, 255, 255), 2)
         for (bx, by, bw, bh) in digit_boxes:
             cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (255, 255, 0), 2)
+        if attack_context_rect:
+            ax, ay, aw, ah = attack_context_rect
+            cv2.rectangle(annotated, (ax, ay), (ax + aw, ay + ah), (255, 0, 255), 1)
         for planned in planned_clicks:
             fx = planned.x - rx
             fy = planned.y - ry
@@ -403,6 +500,8 @@ class CombatController(SkillController):
                 "remaining_s": lock_remaining,
                 "grace_s": self._target_lock_grace,
             },
+            "tile_tracker": tracker_info,
+            "attack_menu_rect": attack_context_rect,
             "click_attempts": dict(self._click_attempts),
             "confidence_history": {
                 "nameplate": list(self._confidence_history["nameplate"]),

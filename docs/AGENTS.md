@@ -41,6 +41,12 @@ This repository is designed for collaboration between multiple AI agents (e.g., 
 - Write messages in tasks using explicit prefixes if helpful: `CODEX:` or `GROC5:`
 - Keep comments short and action-oriented.
 
+## Agent Activity Log
+
+| date (UTC) | agent | focus | key changes | next steps |
+|---|---|---|---|---|
+| 2025-09-18 | codex | Detection roadmap integration | Added tile tracker scaffolding (`bsbot/tracking`), new config fields, roadmap docs (`docs/ARCHITECTURE.md`, `docs/DETECTION.md`), and task entries R1-5..R1-11. | 1) Implement compass auto-align + tile calibration. 2) Finish tile hover workflow + context ROI. 3) Automate minimap anchoring and expose tracker telemetry. |
+
 ## Safety & Scope
 - Screen-based only (no memory reads).
 - Be conservative with input automation; always keep a dry-run path during development.
