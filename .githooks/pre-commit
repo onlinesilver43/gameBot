@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+"""
+Pre-commit hook for automatic documentation maintenance.
+Runs automatically before each commit to ensure documentation stays current.
+"""
+
+import os
+import sys
+import subprocess
+import json
+from pathlib import Path
+from typing import List, Set
+
+
+def get_changed_files() -> List[str]:
+    """Get list of files changed in this commit."""
+    try:
+        # Get staged files
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--name-only"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return result.stdout.strip().split('\n')
+    except subprocess.CalledProcessError:
+        return []
+
+
+def get_modified_lines(file_path: str) -> Set[int]:
+    """Get line numbers modified in a file."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--cached", "-U0", file_path],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        lines = set()
+        for line in result.stdout.split('\n'):
+            if line.startswith('@@'):
+                # Parse diff header like @@ -10,5 +10,5 @@
+                parts = line.split()
+                if len(parts) >= 3:
+                    new_range = parts[2]
+                    if ',' in new_range:
+                        start, count = new_range.split(',')
+                        start_line = int(start.lstrip('+'))
+                        lines.update(range(start_line, start_line + int(count)))
+                    else:
+                        lines.add(int(new_range.lstrip('+')))
+
+        return lines
+    except:
+        return set()
+
+
+def check_python_files(files: List[str]) -> List[str]:
+    """Check Python files for documentation requirements."""
+    issues = []
+
+    for file_path in files:
+        if not file_path.endswith('.py'):
+            continue
+
+        full_path = repo_root / file_path
+        if not full_path.exists():
+            continue
+
+        # Check for missing docstrings on modified functions
+        modified_lines = get_modified_lines(file_path)
+        if modified_lines:
+            func_issues = check_function_docstrings(full_path, modified_lines)
+            issues.extend(func_issues)
+
+    return issues
+
+
+def check_function_docstrings(file_path: Path, modified_lines: Set[int]) -> List[str]:
+    """Check if modified functions have docstrings."""
+    issues = []
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        # Simple check for function definitions on modified lines
+        for line_num in modified_lines:
+            if line_num <= len(lines):
+                line = lines[line_num - 1].strip()
+                if line.startswith('def ') and '(' in line:
+                    # Check next few lines for docstring
+                    has_docstring = False
+                    for i in range(min(3, len(lines) - line_num)):
+                        next_line = lines[line_num + i].strip()
+                        if '"""' in next_line or "'''" in next_line:
+                            has_docstring = True
+                            break
+
+                    if not has_docstring:
+                        func_name = line.split('def ')[1].split('(')[0]
+                        issues.append(f"{file_path}:{line_num} - Function '{func_name}' missing docstring")
+
+    except Exception as e:
+        issues.append(f"Error checking {file_path}: {e}")
+
+    return issues
+
+
+def check_documentation_updates(files: List[str]) -> List[str]:
+    """Check if code changes require documentation updates."""
+    issues = []
+
+    # Check if code files changed without docs
+    code_files = [f for f in files if f.endswith(('.py', '.js', '.html'))]
+    doc_files = [f for f in files if f.startswith('docs/') or f == 'README.md']
+
+    if code_files and not doc_files:
+        # Suggest documentation updates for significant code changes
+        significant_changes = []
+        for file_path in code_files:
+            if len(get_modified_lines(file_path)) > 10:  # Arbitrary threshold
+                significant_changes.append(file_path)
+
+        if significant_changes:
+            issues.append(
+                f"Significant code changes detected in {len(significant_changes)} files. "
+                "Consider updating documentation (docs/API.md, docs/CONFIGURATION.md, etc.)"
+            )
+
+    return issues
+
+
+def validate_links() -> List[str]:
+    """Validate internal documentation links."""
+    issues = []
+
+    try:
+        # Quick check for obvious broken links in modified docs
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "docs/", "README.md"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True
+        )
+
+        modified_docs = result.stdout.strip().split('\n')
+
+        for doc_file in modified_docs:
+            if not doc_file or not doc_file.strip():
+                continue
+
+            full_path = repo_root / doc_file
+            if full_path.exists():
+                link_issues = check_doc_links(full_path)
+                issues.extend(link_issues)
+
+    except Exception as e:
+        issues.append(f"Error validating links: {e}")
+
+    return issues
+
+
+def check_doc_links(doc_path: Path) -> List[str]:
+    """Check for broken links in documentation."""
+    issues = []
+
+    try:
+        with open(doc_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Find markdown links
+        import re
+        link_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
+        links = re.findall(link_pattern, content)
+
+        for text, url in links:
+            if not url.startswith(('http', 'https', '#')):
+                # Relative link - check if target exists
+                link_target = (doc_path.parent / url).resolve()
+                if not link_target.exists():
+                    issues.append(f"Broken link in {doc_path.name}: {url}")
+
+    except Exception as e:
+        issues.append(f"Error checking links in {doc_path}: {e}")
+
+    return issues
+
+
+def auto_update_changelog(files: List[str]) -> bool:
+    """Automatically update changelog with recent changes."""
+    try:
+        # Only update if there are significant changes
+        if not any(f.endswith(('.py', '.md')) for f in files):
+            return True
+
+        # Get recent commit messages
+        result = subprocess.run(
+            ["git", "log", "--oneline", "-5"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        recent_commits = result.stdout.strip().split('\n')
+
+        # Update changelog if it exists
+        changelog_path = repo_root / "docs" / "CHANGELOG.md"
+        if changelog_path.exists():
+            update_changelog_with_commits(changelog_path, recent_commits)
+
+        return True
+
+    except Exception as e:
+        print(f"Warning: Could not auto-update changelog: {e}")
+        return True  # Don't fail commit for this
+
+
+def update_changelog_with_commits(changelog_path: Path, commits: List[str]):
+    """Update changelog with recent commits."""
+    try:
+        with open(changelog_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Find unreleased section
+        unreleased_pattern = r'(## \[Unreleased\](.*?))(?=## \[|$)'
+        match = re.search(unreleased_pattern, content, re.DOTALL)
+
+        if match:
+            unreleased_section = match.group(1)
+
+            # Add new commits that aren't already there
+            new_entries = []
+            for commit in commits:
+                if commit and commit not in unreleased_section:
+                    # Parse commit for categorization
+                    commit_msg = commit.split(' ', 1)[1] if ' ' in commit else commit
+
+                    if any(keyword in commit_msg.lower() for keyword in ['feat', 'add', 'new']):
+                        category = "### Added"
+                    elif any(keyword in commit_msg.lower() for keyword in ['fix', 'bug', 'issue']):
+                        category = "### Fixed"
+                    elif any(keyword in commit_msg.lower() for keyword in ['docs', 'readme', 'changelog']):
+                        category = "### Updated"
+                    else:
+                        category = "### Updated"
+
+                    new_entries.append(f"- {commit_msg}")
+
+            if new_entries:
+                # Find the right place to insert
+                lines = unreleased_section.split('\n')
+                insert_index = -1
+
+                for i, line in enumerate(lines):
+                    if line.startswith('### ') and category.split('### ')[1] in line:
+                        insert_index = i + 1
+                        break
+
+                if insert_index == -1:
+                    # Add new category
+                    unreleased_section += f"\n{category}\n" + "\n".join(new_entries) + "\n"
+                else:
+                    # Insert into existing category
+                    lines.insert(insert_index, "\n".join(new_entries))
+                    unreleased_section = "\n".join(lines)
+
+                # Update content
+                content = content.replace(match.group(1), unreleased_section)
+
+                with open(changelog_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+
+    except Exception as e:
+        print(f"Warning: Could not update changelog: {e}")
+
+
+def main():
+    """Main pre-commit hook logic."""
+    global repo_root
+    repo_root = Path(__file__).parent.parent
+
+    # Get changed files
+    changed_files = get_changed_files()
+    if not changed_files or changed_files == ['']:
+        return 0  # No files changed
+
+    print("🔍 Pre-commit documentation check...")
+
+    all_issues = []
+
+    # Check Python files for documentation
+    python_issues = check_python_files(changed_files)
+    all_issues.extend(python_issues)
+
+    # Check if documentation updates are needed
+    doc_issues = check_documentation_updates(changed_files)
+    all_issues.extend(doc_issues)
+
+    # Validate links in modified documentation
+    link_issues = validate_links()
+    all_issues.extend(link_issues)
+
+    # Auto-update changelog
+    auto_update_changelog(changed_files)
+
+    # Report issues
+    if all_issues:
+        print("❌ Documentation issues found:")
+        for issue in all_issues:
+            print(f"  - {issue}")
+
+        print("\n💡 Fix these issues or use --no-verify to bypass")
+        return 1
+    else:
+        print("✅ Documentation checks passed")
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

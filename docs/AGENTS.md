@@ -11,6 +11,7 @@ This repository is designed for collaboration between multiple AI agents (e.g., 
 - Design decisions: append entries to `docs/DECISIONS.md` (date, context, decision, consequences).
 - Status updates: `docs/STATUS.md` (short, current, human-readable).
 - Architecture reference: `docs/ARCHITECTURE.md` (keep in sync with implementation).
+- Session recap: append a row to the **Agent Activity Log** (see below) detailing scope, touched files, and hand-off notes before ending a run.
 
 ## Task Lifecycle
 1. Create/Update a task in `docs/TASKS.md` with:
@@ -46,6 +47,12 @@ This repository is designed for collaboration between multiple AI agents (e.g., 
 | date (UTC) | agent | focus | key changes | next steps |
 |---|---|---|---|---|
 | 2025-09-18 | codex | Detection roadmap integration | Added tile tracker scaffolding (`bsbot/tracking`), new config fields, roadmap docs (`docs/ARCHITECTURE.md`, `docs/DETECTION.md`), and task entries R1-5..R1-11. | 1) Implement compass auto-align + tile calibration. 2) Finish tile hover workflow + context ROI. 3) Automate minimap anchoring and expose tracker telemetry. |
+| _fill on every session_ | | | | |
+
+**How to use**
+1. When you start, skim the previous entry to understand context.
+2. When you finish, add a new row summarising what you did (link to tasks, PRs, or docs) and list explicit hand-off bullets.
+3. Keep this table concise; detailed change history belongs in `docs/CHANGELOG.md` and Git commits.
 
 ## Safety & Scope
 - Screen-based only (no memory reads).
