@@ -7,10 +7,13 @@ The Brighter Shores bot is a Windows-only, screen-driven automation framework. T
 - Platform & IO (`bsbot/platform/`)
   - `win32/window.py` — Win32 helpers for window discovery, focus, cursor position, DPI.
   - `platform/capture.py` — `mss`-based screen capture returning BGR frames for a given rect.
-  - `platform/input.py` — Human-like mouse click helper with jitter, cooldowns, and foreground checks.
+  - `platform/input.py` — Human-like cursor move/click helpers and keypress simulation with jitter, cooldowns, and foreground checks.
 - Vision (`bsbot/vision/`)
   - `detect.py` — OCR + template primitives with NMS filtering and hitbox helpers.
   - `templates.py` — Utilities to extract and persist template images from screenshots.
+- Navigation (`bsbot/navigation/`)
+  - `compass.py` — Detects compass orientation, drives auto-rotation, and logs resync events.
+  - `minimap.py` — Automates minimap toggling, OCRs absolute tiles/POIs, and updates runtime anchors.
 - Skills (`bsbot/skills/`)
   - `base.py` — `SkillController` contract and `FrameContext` metadata.
   - `combat/controller.py` — OCR-first combat state machine (nameplate → attack → prepare → weapon → loop).
@@ -18,11 +21,13 @@ The Brighter Shores bot is a Windows-only, screen-driven automation framework. T
 - Runtime (`bsbot/runtime/service.py`)
   - `DetectorRuntime` thread owns capture loop, status JSON, timeline logging, and delegates frames to the active skill controller.
   - Maintains shared event/timeline buffer and manages live vs. dry-run click mode.
+  - `CalibrationManager` captures fallback frames, sweeps for optimal template ROIs, writes overrides to `config/calibration/`, and emits `calibration|*` events for visibility.
 - Control & Observability (`bsbot/ui/`)
   - `server.py` — Flask server exposing `/api/start|pause|stop`, `/api/status`, `/api/preview.jpg`, diagnostics, and timeline endpoints.
-  - `templates/index.html` — Modern UI with configuration form, live preview, logs, timeline, and click-mode selector.
+- `templates/index.html` — Modern UI with configuration form, live preview, logs, timeline, tile radar, interactable recorder, and click-mode selector.
     - Phase tracker badge mirrors the combat controller’s human-readable phase list, and both the timeline and activity logs highlight those labels alongside the raw FSM state for quick scanning.
     - Preview frames are downscaled (default 0.75×) and encoded at reduced quality for responsiveness; `BSBOT_PREVIEW_SCALE` / `BSBOT_PREVIEW_QUALITY` tune this without touching the detection pipeline.
+    - The interactable recorder panel arms a capture session, records a click from the preview, and persists normalized coordinates for the selected profile.
   - `hotkeys.py` — Global hotkeys (Ctrl+Alt+P Pause/Resume, Ctrl+Alt+O Kill) using `keyboard` or Win32 fallback.
 - CLI Utilities (`bsbot/main.py` & scripts)
   - PowerShell scripts under `scripts/` bootstrap the venv, run the server, capture tests, and template extraction.
@@ -31,11 +36,13 @@ The Brighter Shores bot is a Windows-only, screen-driven automation framework. T
 
 - `assets/templates/` — Edge-detected templates (e.g., `wendigo.png`).
 - `assets/images/` — Full screenshots for testing and template extraction.
-- `config/profile.yml` — Default window title, ROI, delays, detection thresholds, and global defaults.
+- `config/profile.yml` — Default window title, ROI, delays, detection thresholds, compass/minimap tuning, and global defaults.
+- `config/interactables/` — Object profiles (e.g., compass, minimap toggle) with metadata and recorded relative coordinates.
 - `config/keys.yml` — Key bindings for combat/interaction actions.
 - `config/monsters/` — One YAML per creature (word, prefix, template, attack cues).
 - `config/interfaces/` — UI interface definitions (attack button, prepare targets, weapon slots).
 - `config/elements/` — Legacy element hints (loot, misc.).
+- `config/calibration/` — Auto-generated ROI overrides consumed by the runtime on startup.
 
 ## Detection Pipelines
 
@@ -47,14 +54,18 @@ The Brighter Shores bot is a Windows-only, screen-driven automation framework. T
   - Red-mask pass for enemy nameplates, grayscale fallback for white-on-dark buttons.
   - Uses `pytesseract.image_to_data`, filters by size/aspect, applies NMS.
   - Strength: no template required, works across variants.
+- **Tile-aware gating**
+  - `TileGrid` converts between screen pixels and the combat grid using `tile_size_px` calibration.
+  - `TileTracker` maintains `(row, col, vx, vy)` per target, predicting through short occlusions.
+  - Hover confirmation OCR runs on a micro ROI above the tracked tile before any context button is considered.
 
 ## Runtime Loop
 
-1. Acquire game window rect; compute skill-configured ROI.
-2. Capture ROI via `bsbot.platform.capture.grab_rect`.
+1. Acquire the game window rect, run optional compass alignment (`CompassManager`) and minimap anchoring (`MinimapManager`).
+2. Compute the skill-configured ROI and capture it via `bsbot.platform.capture.grab_rect`.
 3. Build a `FrameContext` and dispatch to the active `SkillController` (combat by default).
-4. Skill returns detection result JSON and an annotated preview.
-5. Runtime updates shared status, logs timeline events, and, when in live mode, plays back scheduled human-like clicks.
+4. Skill returns detection result JSON and an annotated preview; hover/context actions may be enqueued alongside clicks.
+5. Runtime updates shared status, logs timeline events (`detect|*`, `hover_tile`, `calibration|*`), and, when in live mode, plays back scheduled human-like inputs.
 6. Sleep ~100 ms by default (configurable via `BSBOT_LOOP_SLEEP`) and repeat until paused or stopped.
 
 ### State Machines & Events
@@ -62,7 +73,7 @@ The Brighter Shores bot is a Windows-only, screen-driven automation framework. T
 - `CombatController` implements a six-state FSM that mirrors the combat sequence:
   1. **Scan** — “Search for Monster”. Emit `detect|nameplate` and (if configured) `detect|name_prefix` when OCR sees the target words.
   2. **PrimeTarget** — “Click on the Monster”. When ready, we emit `click|prime_nameplate` (dry-run or live) and await the attack button.
-  3. **AttackPanel** — “Detect the Attack Box” / “Click the Attack Box”. Events `detect|attack_button` and `click|attack_button` fire here.
+  3. **AttackPanel** — “Detect the Attack Box” / “Click the Attack Box”. A `hover_tile` action precedes `detect|attack_button`; only once hover OCR confirms “Attack” do we emit `click|attack_button`.
   4. **Prepare** — “Detect the Prepare for Battle box”. Emits `detect|prepare_header` while monitoring for the weapon slot.
   5. **Weapon** — “Detect/Click the Weapon box”. Events `detect|weapon_slot_1` and `click|weapon_1` advance the FSM.
   6. **BattleLoop** — “Detect fight started/completed”. Confirmation `confirm|special_attacks` signals the fight is active; absence of those cues triggers `transition|battle_end` and returns to Scan.

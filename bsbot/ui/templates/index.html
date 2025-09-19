@@ -213,6 +213,43 @@
         background-size: 20px 20px;
       }
 
+      .calibration-summary {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 12px;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      .calibration-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(0, 212, 170, 0.08);
+        border: 1px solid rgba(0, 212, 170, 0.35);
+        border-radius: 999px;
+        padding: 4px 10px;
+        color: var(--text-primary);
+      }
+
+      .calibration-chip[data-stable="false"] {
+        background: rgba(255, 149, 5, 0.08);
+        border-color: rgba(255, 149, 5, 0.35);
+      }
+
+      .calibration-chip .label {
+        font-weight: 600;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+      }
+
+      .calibration-chip .meta {
+        font-size: 11px;
+        color: var(--text-secondary);
+      }
+
       .preview-container {
         position: relative;
         text-align: center;
@@ -244,6 +281,30 @@
       .logs-panel .log-phase {
         color: var(--accent-color);
         font-weight: 600;
+      }
+
+      .tile-radar-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+      }
+
+      #tile_radar {
+        width: 100%;
+        max-width: 320px;
+        background: radial-gradient(circle at center, rgba(0, 212, 170, 0.08), rgba(0, 0, 0, 0.85));
+        border: 2px solid var(--border-color);
+        border-radius: 12px;
+        box-shadow: var(--shadow);
+        image-rendering: pixelated;
+      }
+
+      .tile-radar-status {
+        font-size: 12px;
+        color: var(--text-secondary);
+        text-align: center;
+        min-height: 18px;
       }
 
       .status-indicator {
@@ -407,6 +468,7 @@
 
         <div class="card">
           <h3>📊 Status Monitor</h3>
+          <div id="calibration_summary" class="calibration-summary"></div>
           <div id="status" class="status-panel">{}</div>
         </div>
       </div>
@@ -427,6 +489,26 @@
           <h3>🧭 Event Timeline</h3>
           <div id="timeline" class="logs-panel"></div>
         </div>
+        <div class="card">
+          <h3>🗺️ Tile Radar</h3>
+          <div class="tile-radar-container">
+            <canvas id="tile_radar" width="280" height="280"></canvas>
+            <div id="tile_radar_status" class="tile-radar-status">Tile tracker inactive – enable tile_size_px to view grid.</div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>📍 Interactable Recorder</h3>
+          <div class="form-group">
+            <label for="interactable_id">Interactable</label>
+            <select id="interactable_id"></select>
+          </div>
+          <div class="button-group">
+            <button id="interactable_start" class="btn btn-primary" type="button">🎯 Start Capture</button>
+            <button id="interactable_save" class="btn btn-primary" type="button" disabled>💾 Save to Profile</button>
+            <button id="interactable_cancel" class="btn btn-secondary" type="button" disabled>✖ Cancel</button>
+          </div>
+          <div class="logs-panel" style="margin-top:16px;height:180px;" id="interactable_log">Select an interactable and click “Start Capture”.</div>
+        </div>
       </div>
     </div>
 
@@ -435,6 +517,17 @@
       const phaseBadge = document.getElementById('phase_badge');
       let currentTitle = 'Brighter Shores';
       let currentPhase = 'Search for Monster';
+      const tileCanvas = $('tile_radar');
+      const tileStatusEl = $('tile_radar_status');
+      const tileCtx = tileCanvas ? tileCanvas.getContext('2d') : null;
+      const RADAR_BASE_SIZE = 280;
+      const RADAR_RADIUS = 5;
+      let latestStatusSnapshot = null;
+      let captureArmed = false;
+      let captureTargetId = null;
+      let interactableRecords = {};
+      let lastRecordsFetch = 0;
+      let lastCaptureRecord = null;
 
       const updatePhaseBadge = (phase, reason = '') => {
         if (!phaseBadge) return;
@@ -443,6 +536,37 @@
         phaseBadge.title = reason
           ? `Current Phase: ${label}\nLast transition: ${reason}`
           : `Current Phase: ${label}`;
+      };
+
+      const renderCalibrationSummary = (calibration) => {
+        const container = $('calibration_summary');
+        if (!container) return;
+        if (!calibration || typeof calibration !== 'object' || !calibration.success_streak) {
+          container.textContent = 'Calibration telemetry unavailable.';
+          return;
+        }
+        const order = ['nameplate', 'attack'];
+        const chips = [];
+        order.forEach((key) => {
+          const streaks = calibration.success_streak || {};
+          if (!(key in streaks)) return;
+          const streak = Number(streaks[key] ?? 0);
+          const fallback = Number((calibration.fallback_streak || {})[key] ?? 0);
+          const stable = Boolean((calibration.stable || {})[key]);
+          const since = (calibration.stable_since || {})[key] || '';
+          const overrides = calibration.overrides || {};
+          const roi = Array.isArray(overrides[key]) ? overrides[key].map((v) => Number(v).toFixed(3)).join(', ') : 'default';
+          const parts = [];
+          parts.push(stable ? 'stable' : 'learning');
+          parts.push(`streak ${streak}`);
+          parts.push(`fallback ${fallback}`);
+          if (since && stable) {
+            parts.push(`since ${since}`);
+          }
+          parts.push(`roi ${roi}`);
+          chips.push(`<div class="calibration-chip" data-stable="${stable}"><span class="label">${key}</span><span class="meta">${parts.join(' · ')}</span></div>`);
+        });
+        container.innerHTML = chips.length ? chips.join('') : 'Calibration telemetry unavailable.';
       };
 
       const escapeHtml = (str = '') =>
@@ -464,6 +588,236 @@
           })
           .join('<br/>');
       };
+
+      const prepareTileCanvas = () => {
+        if (!tileCanvas || !tileCtx) return null;
+        const dpr = window.devicePixelRatio || 1;
+        if (tileCanvas._dpr !== dpr) {
+          tileCanvas._dpr = dpr;
+          tileCanvas.width = RADAR_BASE_SIZE * dpr;
+          tileCanvas.height = RADAR_BASE_SIZE * dpr;
+          tileCanvas.style.width = `${RADAR_BASE_SIZE}px`;
+          tileCanvas.style.height = `${RADAR_BASE_SIZE}px`;
+        }
+        tileCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        tileCtx.clearRect(0, 0, RADAR_BASE_SIZE, RADAR_BASE_SIZE);
+        return { width: RADAR_BASE_SIZE, height: RADAR_BASE_SIZE };
+      };
+
+      const drawFallbackRadar = (message) => {
+        if (!tileCtx) return;
+        const surface = prepareTileCanvas();
+        if (!surface) return;
+        tileCtx.save();
+        tileCtx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+        tileCtx.font = '14px "Segoe UI", sans-serif';
+        tileCtx.textAlign = 'center';
+        tileCtx.textBaseline = 'middle';
+        tileCtx.fillText(message, surface.width / 2, surface.height / 2);
+        tileCtx.restore();
+        if (tileStatusEl) tileStatusEl.textContent = message;
+      };
+
+      const drawTileRadar = (status) => {
+        if (!tileCtx) return;
+        if (!status || !status.last_result) {
+          drawFallbackRadar('No status available');
+          return;
+        }
+
+        const tracker = status.last_result.tile_tracker;
+        const hover = status.last_result.hover || {};
+        const tileSize = Number(status.tile_size_px || 0);
+        if (!tracker || !Number.isFinite(tileSize) || tileSize <= 0 || typeof tracker.row !== 'number' || typeof tracker.col !== 'number') {
+          drawFallbackRadar('Tile tracker inactive');
+          return;
+        }
+
+        const surface = prepareTileCanvas();
+        if (!surface) return;
+        const { width, height } = surface;
+        const ctx = tileCtx;
+        const windowSize = RADAR_RADIUS * 2 + 1;
+        const drawableSize = Math.min(width, height) - 30;
+        const tilePx = Math.max(6, Math.floor(drawableSize / windowSize));
+        const gridSize = tilePx * windowSize;
+        const originX = (width - gridSize) / 2;
+        const originY = (height - gridSize) / 2;
+        const playerTile = Array.isArray(tracker.player_tile) && tracker.player_tile.length === 2
+          ? tracker.player_tile
+          : [tracker.row, tracker.col];
+        const playerRow = playerTile[0] ?? tracker.row;
+        const playerCol = playerTile[1] ?? tracker.col;
+
+        const worldTile = Array.isArray(tracker.world_tile) && tracker.world_tile.length === 2
+          ? tracker.world_tile
+          : (Array.isArray(status.world_tile) && status.world_tile.length === 2 ? status.world_tile : null);
+
+        const tilePoint = (row, col) => {
+          const relRow = (row - playerRow) + RADAR_RADIUS;
+          const relCol = (col - playerCol) + RADAR_RADIUS;
+          if (relRow < -1 || relRow > windowSize + 1 || relCol < -1 || relCol > windowSize + 1) {
+            return null;
+          }
+          return {
+            x: originX + relCol * tilePx,
+            y: originY + relRow * tilePx,
+          };
+        };
+
+        const tileRectFor = (row, col, rows = 1, cols = 1) => {
+          const point = tilePoint(row, col);
+          if (!point) return null;
+          return {
+            x: point.x,
+            y: point.y,
+            w: cols * tilePx,
+            h: rows * tilePx,
+          };
+        };
+
+        const tileCenterFor = (row, col) => {
+          const point = tilePoint(row + 0.5, col + 0.5);
+          if (!point) return null;
+          return point;
+        };
+
+        // Checkerboard grid
+        ctx.save();
+        ctx.lineWidth = 1;
+        for (let rOff = -RADAR_RADIUS; rOff <= RADAR_RADIUS; rOff++) {
+          for (let cOff = -RADAR_RADIUS; cOff <= RADAR_RADIUS; cOff++) {
+            const row = playerRow + rOff;
+            const col = playerCol + cOff;
+            const rect = tileRectFor(row, col);
+            if (!rect) continue;
+            const isEven = (rOff + cOff) % 2 === 0;
+            ctx.fillStyle = isEven ? 'rgba(32, 45, 54, 0.92)' : 'rgba(26, 35, 41, 0.92)';
+            ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+            ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+            ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+          }
+        }
+
+        // Crosshair axes
+        const vertical = tileRectFor(playerRow - RADAR_RADIUS, playerCol, windowSize, 1);
+        const horizontal = tileRectFor(playerRow, playerCol - RADAR_RADIUS, 1, windowSize);
+        ctx.strokeStyle = 'rgba(0, 212, 170, 0.12)';
+        ctx.lineWidth = 1.2;
+        if (vertical) ctx.strokeRect(vertical.x, vertical.y, vertical.w, vertical.h);
+        if (horizontal) ctx.strokeRect(horizontal.x, horizontal.y, horizontal.w, horizontal.h);
+
+        // Player tile
+        const playerRect = tileRectFor(playerRow, playerCol);
+        if (playerRect) {
+          ctx.fillStyle = 'rgba(0, 212, 170, 0.25)';
+          ctx.fillRect(playerRect.x, playerRect.y, playerRect.w, playerRect.h);
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#00d4aa';
+          ctx.strokeRect(playerRect.x, playerRect.y, playerRect.w, playerRect.h);
+          const center = tileCenterFor(playerRow, playerCol);
+          if (center) {
+            ctx.fillStyle = '#00f5c3';
+            ctx.font = '11px "Segoe UI", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('YOU', center.x, center.y);
+          }
+        }
+
+        // Hover tile highlight
+        if (Array.isArray(hover.tile) && hover.tile.length === 2) {
+          const hoverRow = hover.tile[0];
+          const hoverCol = hover.tile[1];
+          const hoverRect = tileRectFor(hoverRow, hoverCol);
+          if (hoverRect) {
+            ctx.save();
+            ctx.lineWidth = 3;
+            ctx.setLineDash(hover.confirmed ? [] : [6, 4]);
+            ctx.strokeStyle = hover.confirmed ? '#ff4d6d' : '#ffa502';
+            ctx.strokeRect(hoverRect.x, hoverRect.y, hoverRect.w, hoverRect.h);
+            ctx.restore();
+          }
+        }
+
+        // Tracked monster tile
+        const trackRect = tileRectFor(tracker.row, tracker.col);
+        if (trackRect) {
+          const conf = Math.max(0, Math.min(1, Number(tracker.confidence) || 0));
+          ctx.fillStyle = `rgba(255, 165, 0, ${0.2 + conf * 0.5})`;
+          ctx.fillRect(trackRect.x, trackRect.y, trackRect.w, trackRect.h);
+          ctx.lineWidth = tracker.hover_confirmed ? 3 : 2;
+          ctx.strokeStyle = tracker.hover_confirmed ? '#ff4d6d' : '#ffa502';
+          ctx.strokeRect(trackRect.x, trackRect.y, trackRect.w, trackRect.h);
+
+          const center = tileCenterFor(tracker.row, tracker.col);
+          if (center) {
+            ctx.fillStyle = '#ffd166';
+            ctx.font = '11px "Segoe UI", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.fillText(`conf ${ (tracker.confidence ?? 0).toFixed(2) }`, center.x, center.y + trackRect.h / 2 - 14);
+
+            const vel = Array.isArray(tracker.velocity) ? tracker.velocity : [tracker.vx || 0, tracker.vy || 0];
+            const vx = Number(vel[0]) || 0;
+            const vy = Number(vel[1]) || 0;
+            if (vx || vy) {
+              const arrowEnd = tileCenterFor(tracker.row + vy * 0.6, tracker.col + vx * 0.6);
+              if (arrowEnd) {
+                ctx.save();
+                ctx.strokeStyle = '#ffa502';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(center.x, center.y);
+                ctx.lineTo(arrowEnd.x, arrowEnd.y);
+                ctx.stroke();
+                ctx.restore();
+              }
+            }
+          }
+        }
+
+        // Context menu ROI approximation (relative to tracked tile)
+        if (trackRect) {
+          const menuRect = tileRectFor(tracker.row - 0.25, tracker.col + 1, 1.7, 1.4);
+          if (menuRect) {
+            ctx.save();
+            ctx.fillStyle = 'rgba(255, 75, 130, 0.12)';
+            ctx.strokeStyle = 'rgba(255, 75, 130, 0.6)';
+            ctx.lineWidth = 1.5;
+            ctx.fillRect(menuRect.x, menuRect.y, menuRect.w, menuRect.h);
+            ctx.strokeRect(menuRect.x, menuRect.y, menuRect.w, menuRect.h);
+            ctx.restore();
+          }
+        }
+
+        // Planned hover target indicator (when tile differs)
+        if (!hover.confirmed && hover.active && Array.isArray(hover.tile)) {
+          // already highlighted - optional additional marker
+        }
+
+        // World tile annotation
+        ctx.save();
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.font = '12px "Segoe UI", sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        const infoParts = [];
+        infoParts.push(`Target: r${tracker.row}, c${tracker.col}`);
+        infoParts.push(`Hover: ${hover.confirmed ? 'confirmed' : hover.active ? 'arming' : 'idle'}`);
+        if (worldTile) {
+          infoParts.push(`World ${worldTile[0]},${worldTile[1]}`);
+        }
+        const statusLine = infoParts.join(' • ');
+        if (tileStatusEl) {
+          tileStatusEl.textContent = statusLine;
+        }
+        const textY = Math.max(originY - 14, 12);
+        ctx.fillText(statusLine, originX, textY);
+        ctx.restore();
+      };
+
+      window.addEventListener('resize', () => drawTileRadar(latestStatusSnapshot));
 
       // Enhanced button interactions
       const formatOptionLabel = (item) => {
@@ -568,6 +922,13 @@
       $("start").onclick = start;
       $("pause").onclick = pause;
       $("stop").onclick = stop;
+      $("interactable_start").onclick = () => armCapture();
+      $("interactable_cancel").onclick = () => cancelCapture();
+      $("interactable_save").onclick = () => saveCapture();
+      $("interactable_id").addEventListener('change', () => {
+        captureTargetId = $('interactable_id').value;
+        renderInteractableRecords();
+      });
 
       // Enhanced polling with better error handling and UI updates
       async function poll() {
@@ -588,6 +949,7 @@
               .replace(/"paused":\s*(true|false)/g, '"paused": <span class="status-$1">$1</span>');
 
             $("status").innerHTML = formattedStatus;
+            renderCalibrationSummary(nice.calibration);
 
             // Update button states based on status
             const startBtn = $("start");
@@ -635,6 +997,10 @@
 
             syncSelectOptions($("monster_id"), nice.monsters || [], nice.monster_id);
             syncSelectOptions($("interface_id"), nice.interfaces || [], nice.interface_id);
+            syncSelectOptions($("interactable_id"), nice.interactables || [], captureTargetId);
+
+            latestStatusSnapshot = nice;
+            drawTileRadar(nice);
           }
 
           // Update preview with cache busting
@@ -643,6 +1009,9 @@
 
         } catch (e) {
           console.warn('Status update failed:', e);
+          latestStatusSnapshot = null;
+          renderCalibrationSummary(null);
+          drawFallbackRadar('Status unavailable');
         }
 
         try {
@@ -683,6 +1052,11 @@
         } catch (e) {
           console.warn('Timeline update failed:', e);
         }
+
+        if (Date.now() - lastRecordsFetch > 1500) {
+          fetchInteractableRecords();
+          lastRecordsFetch = Date.now();
+        }
       }
 
       // Start polling
@@ -691,6 +1065,7 @@
 
       // Initialize badge immediately
       updatePhaseBadge(currentPhase);
+      renderCalibrationSummary(null);
 
       // Add some visual enhancements
       document.addEventListener('DOMContentLoaded', function() {
@@ -716,6 +1091,157 @@
           });
         });
       });
+
+      const armCapture = () => {
+        const select = $('interactable_id');
+        if (!select || !select.value) {
+          alert('Select an interactable profile first.');
+          return;
+        }
+        captureArmed = true;
+        captureTargetId = select.value;
+        $('interactable_start').disabled = true;
+        $('interactable_cancel').disabled = false;
+        $('interactable_save').disabled = true;
+        $('interactable_cancel').textContent = '✖ Cancel';
+        logInteractable(`Armed for ${captureTargetId}. Click on the preview to record.`);
+      };
+
+      const cancelCapture = () => {
+        if (!captureArmed) return;
+        captureArmed = false;
+        $('interactable_start').disabled = false;
+        $('interactable_cancel').disabled = true;
+        $('interactable_save').disabled = !lastCaptureRecord;
+        logInteractable('Capture cancelled.');
+      };
+
+      const logInteractable = (msg) => {
+        const view = $('interactable_log');
+        if (!view) return;
+        const existing = view.textContent ? `${msg}\n${view.textContent}` : msg;
+        view.textContent = existing.split('\n').slice(0, 50).join('\n');
+      };
+
+      const renderInteractableRecords = () => {
+        const view = $('interactable_log');
+        const select = $('interactable_id');
+        if (!view || !select) return;
+        const target = select.value;
+        const records = interactableRecords[target] || [];
+        if (!records.length) {
+          view.textContent = captureArmed
+            ? `Armed for ${target}. Click preview to capture.`
+            : 'No recordings yet.';
+          return;
+        }
+        const lines = records.slice().reverse().map((rec) => {
+          const rel = Array.isArray(rec.roi_rel) ? rec.roi_rel.map((v) => Number(v).toFixed(4)).join(', ') : '';
+          return `${rec.ts} • roi_rel=(${rel}) • screen=${rec.screen_xy}`;
+        });
+        view.textContent = lines.join('\n');
+        const saveBtn = $('interactable_save');
+        if (saveBtn) {
+          saveBtn.disabled = !(lastCaptureRecord && lastCaptureRecord.interactable_id === target);
+        }
+      };
+
+      const fetchInteractableRecords = async () => {
+        try {
+          const res = await fetch('/api/interactables/records');
+          if (res.ok) {
+            interactableRecords = await res.json();
+            renderInteractableRecords();
+          }
+        } catch (e) {
+          console.warn('Interactable records fetch failed', e);
+        }
+      };
+
+      const previewImg = $("preview");
+      previewImg.addEventListener('click', async (evt) => {
+        if (!captureArmed) return;
+        if (!captureTargetId) {
+          cancelCapture();
+          return;
+        }
+        const rect = previewImg.getBoundingClientRect();
+        if (!rect.width || !rect.height) {
+          alert('Preview not ready.');
+          cancelCapture();
+          return;
+        }
+        const fx = (evt.clientX - rect.left) / rect.width;
+        const fy = (evt.clientY - rect.top) / rect.height;
+        if (isNaN(fx) || isNaN(fy)) {
+          alert('Failed to compute coordinates.');
+          cancelCapture();
+          return;
+        }
+        try {
+          const res = await fetch('/api/interactables/record', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              interactable_id: captureTargetId,
+              roi_rel: [fx, fy],
+            }),
+          });
+          if (res.ok) {
+            const record = await res.json();
+            record.interactable_id = captureTargetId;
+            logInteractable(`Recorded ${captureTargetId}: roi_rel=${record.roi_rel} screen=${record.screen_xy}`);
+            lastCaptureRecord = record;
+            $('interactable_save').disabled = false;
+            fetchInteractableRecords();
+          } else {
+            const payload = await res.json().catch(() => ({}));
+            alert(`Recording failed: ${payload.error || res.statusText}`);
+            $('interactable_save').disabled = !lastCaptureRecord;
+          }
+        } finally {
+          captureArmed = false;
+          $('interactable_start').disabled = false;
+          $('interactable_cancel').disabled = true;
+        }
+      });
+
+      const saveCapture = async () => {
+        if (!lastCaptureRecord) {
+          alert('Capture a position first.');
+          return;
+        }
+        const targetId = lastCaptureRecord.interactable_id || $('interactable_id').value;
+        if (!targetId) {
+          alert('Select an interactable profile first.');
+          return;
+        }
+        $('interactable_save').disabled = true;
+        try {
+          const res = await fetch('/api/interactables/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              interactable_id: targetId,
+              coords: lastCaptureRecord.roi_rel,
+              roi_xy: lastCaptureRecord.roi_xy,
+              screen_xy: lastCaptureRecord.screen_xy,
+            }),
+          });
+          if (res.ok) {
+            logInteractable(`Saved to ${targetId}.`);
+            fetchInteractableRecords();
+          } else {
+            const payload = await res.json().catch(() => ({}));
+            alert(`Save failed: ${payload.error || res.statusText}`);
+            $('interactable_save').disabled = false;
+          }
+        } catch (e) {
+          console.warn('Save failed', e);
+          alert('Save failed. Check console for details.');
+          $('interactable_save').disabled = false;
+        }
+      };
     </script>
   </body>
 </html>

@@ -47,6 +47,7 @@ This repository is designed for collaboration between multiple AI agents (e.g., 
 | date (UTC) | agent | focus | key changes | next steps |
 |---|---|---|---|---|
 | 2025-09-18 | codex | Detection roadmap integration | Added tile tracker scaffolding (`bsbot/tracking`), new config fields, roadmap docs (`docs/ARCHITECTURE.md`, `docs/DETECTION.md`), and task entries R1-5..R1-11. | 1) Implement compass auto-align + tile calibration. 2) Finish tile hover workflow + context ROI. 3) Automate minimap anchoring and expose tracker telemetry. |
+| 2025-09-19 | codex | Tile-aware detection R1 completion | Implemented compass/minimap managers, tile calibration helpers & tests, hover-confirmed context clicks, expanded telemetry (`/api/status`), and refreshed docs/tasks. | 1) Wire live combat inputs (R1-2/R1-3). 2) Extend navigation beyond local tiles. |
 | _fill on every session_ | | | | |
 
 **How to use**

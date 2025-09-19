@@ -20,6 +20,8 @@ config/
 │   ├── twisted_wendigo.yml
 │   ├── common_viper.yml
 │   └── ...
+├── calibration/        # Auto-generated template ROI overrides
+│   └── roi_overrides.yml
 └── interfaces/         # UI interface definitions
     └── combat.yml
 ```
@@ -69,6 +71,14 @@ roi_y: 0.25
 roi_width: 0.6
 roi_height: 0.5
 
+# Optional pixel-based ROI (auto scaled using the live client size)
+roi_pixels:
+  x: 206
+  y: 334
+  width: 1920
+  height: 1168
+  reference_size: [2560, 1440]
+
 # Profile Defaults
 default_monster: "twisted_wendigo"
 default_interface: "combat"
@@ -117,6 +127,61 @@ save_screenshots: false
 | `roi_y` | float | 0.25 | Region of interest Y (0.0-1.0) |
 | `roi_width` | float | 0.6 | Region of interest width (0.0-1.0) |
 | `roi_height` | float | 0.5 | Region of interest height (0.0-1.0) |
+
+### ROI Configuration Options
+- `roi_x/roi_y/roi_width/roi_height` (legacy) — fractional offsets relative to the live client size. These stay backward-compatible.
+- `roi_pixels` block (recommended) — supply `x/y/width/height` in pixels captured at a known client size (`reference_size: [width, height]`). At runtime the ROI is automatically rescaled to the current Win32 client rect so the preview stays aligned even when the window moves or resizes.
+
+
+#### Tile Grid Settings *(combat/navigation roadmap)*
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `tile_size_px` | float | 112 | Approximate tile edge length in screen pixels (0 disables the tile tracker). |
+| `tile_origin_px` | list[float] | `[0, 0]` | ROI-relative offset (x, y) marking the origin tile’s top-left corner. |
+| `player_tile_offset` | list[float] | `[0.5, 0.5]` | Fractional offset from ROI origin to the player tile (used to infer adjacency). |
+| `compass_auto_align` | bool | `false` | When true, runtime rotates the camera until the compass points North before calibrating the grid. |
+
+#### Interactable Profiles
+- Location: `config/interactables/*.yml`
+- Purpose: Store metadata and recorded coordinates for non-monster interactables (compass, minimap toggle, loot buttons, etc.).
+
+Example structure:
+
+```yaml
+id: compass
+name: "Compass Needle"
+description: "Top-left compass widget used for orientation alignment."
+notes:
+  - "Capture tile orientation before opening minimap."
+reference:
+  type: ui
+  roi_hint: "top-left"
+  elements:
+    - label: "Needle pivot"
+      kind: "point"
+      coords: [0.1275, 0.0942]  # normalized ROI coordinates (filled by recorder)
+```
+
+Use the interactable recorder panel in the UI to capture `coords` values and click **Save to Profile** to write them directly into the YAML file (a snippet like the above is stored automatically).
+
+#### Compass Settings
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `compass.roi` | list[float] | `[0.88, 0.04, 0.1, 0.1]` | Normalised (x, y, w, h) window region containing the compass needle. |
+| `compass.rotate_keys` | list[string] | `["left", "right"]` | Keybinds used for camera rotation (positive angle uses first entry). |
+| `compass.align_threshold_deg` | float | `5.0` | Target tolerance (degrees) before rotation stops. |
+| `compass.drift_threshold_deg` | float | `8.0` | Allowed drift before re-alignment is triggered mid-run. |
+| `compass.sample_interval_s` | float | `2.5` | Minimum seconds between compass samples. |
+| `compass.rotation_rate_deg_s` | float | `120.0` | Estimated camera rotation speed, used to compute key hold duration. |
+| `compass.rotation_hold_s` | float | `0.16` | Minimum key hold duration (seconds). |
+
+#### Minimap Settings
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `minimap.toggle_key` | string | `"m"` | Key used to open/close the minimap. |
+| `minimap.roi` | list[float] | `[0.74, 0.1, 0.22, 0.32]` | Normalised minimap capture region. |
+| `minimap.coords_roi` | list[float] | `[0.79, 0.42, 0.16, 0.1]` | Sub-ROI containing absolute tile coordinates within the minimap. |
+| `minimap.anchor_interval_s` | float | `45.0` | Seconds between automatic minimap anchor refreshes (0 disables). |
 
 #### Profile Defaults
 | Field | Type | Default | Description |
@@ -297,6 +362,22 @@ special_tokens:
 | `prepare_targets` | array | OCR words for prepare/battle screen |
 | `weapon_digits` | array | Weapon slot digit recognition |
 | `special_tokens` | array | Special attacks OCR tokens |
+
+---
+
+## Calibration Overrides
+
+The calibration subsystem keeps template ROIs in sync with the live capture.
+
+- **File**: `config/calibration/roi_overrides.yml` (auto-created)
+- **Values**: Normalised `[rx, ry, rw, rh]` tuples for each detector. Example:
+
+```yaml
+nameplate_template_roi: [0.35, 0.15, 0.32, 0.20]
+attack_template_roi: [0.37, 0.25, 0.30, 0.18]
+```
+
+The runtime rewrites this file whenever a calibration succeeds (score ≥ 0.90). Delete it to fall back to the baked-in defaults; new calibrations will regenerate it automatically the next time OCR rescues a detection.
 
 ---
 

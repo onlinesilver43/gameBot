@@ -1,0 +1,31 @@
+id: compass
+name: Compass Needle
+description: Top-left compass widget used for orientation alignment.
+notes:
+- Capture tile orientation before opening minimap.
+reference:
+  type: ui
+  roi_hint: top-left
+  elements:
+  - label: Needle pivot
+    kind: point
+    coords:
+    - 0.023168544837012462
+    - 0.04257638419732693
+    roi_xy:
+    - 44
+    - 46
+    screen_xy:
+    - 408
+    - 450
+  - label: Minimap toggle
+    kind: point
+    coords:
+    - 0.023168544837012462
+    - 0.04257638419732693
+    roi_xy:
+    - 44
+    - 46
+    screen_xy:
+    - 408
+    - 450

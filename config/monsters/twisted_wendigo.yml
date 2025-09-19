@@ -3,4 +3,5 @@ name: "Twisted Wendigo"
 word: "Wendigo"
 prefix: "Twisted"
 attack_word: "Attack"
-template: "assets/templates/wendigo.png"
+template: "assets/templates/wendigo2.png"
+template_threshold: 0.9

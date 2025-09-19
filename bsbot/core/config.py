@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 import yaml
 
 
@@ -67,6 +67,65 @@ class Config:
             data = self.load_interface_profile(path.stem) or {}
             out.append({"id": data.get("id") or path.stem, "name": data.get("name")})
         return out
+
+    def _interactable_path(self, interactable_id: str) -> Path:
+        return self.config_dir / "interactables" / f"{interactable_id}.yml"
+
+    def load_interactable_profile(self, interactable_id: str) -> Dict[str, Any]:
+        """Load an interactable profile by id."""
+        return self._load_config(f"interactables/{interactable_id}.yml")
+
+    def list_interactable_profiles(self) -> List[Dict[str, Any]]:
+        base = self.config_dir / "interactables"
+        if not base.exists():
+            return []
+        out: List[Dict[str, Any]] = []
+        for path in sorted(base.glob("*.yml")):
+            data = self.load_interactable_profile(path.stem) or {}
+            out.append({"id": data.get("id") or path.stem, "name": data.get("name") or path.stem})
+        return out
+
+    def save_interactable_coords(
+        self,
+        interactable_id: str,
+        *,
+        coords: Tuple[float, float],
+        roi_xy: Optional[Tuple[int, int]] = None,
+        screen_xy: Optional[Tuple[int, int]] = None,
+        element_index: int = 0,
+    ) -> Dict[str, Any]:
+        path = self._interactable_path(interactable_id)
+        if not path.exists():
+            raise FileNotFoundError(f"Interactable profile not found: {interactable_id}")
+
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                data = yaml.safe_load(fh) or {}
+        except Exception as exc:  # pragma: no cover - defensive
+            raise RuntimeError(f"Failed to load interactable profile {interactable_id}: {exc}") from exc
+
+        reference = data.setdefault("reference", {})
+        elements = reference.setdefault("elements", [])
+        while len(elements) <= element_index:
+            elements.append({"label": f"point_{len(elements)}", "kind": "point"})
+        element = elements[element_index] or {}
+        element["coords"] = [float(coords[0]), float(coords[1])]
+        if roi_xy:
+            element["roi_xy"] = [int(roi_xy[0]), int(roi_xy[1])]
+        if screen_xy:
+            element["screen_xy"] = [int(screen_xy[0]), int(screen_xy[1])]
+        elements[element_index] = element
+
+        try:
+            with path.open("w", encoding="utf-8") as fh:
+                yaml.safe_dump(data, fh, sort_keys=False, allow_unicode=True)
+        except Exception as exc:  # pragma: no cover
+            raise RuntimeError(f"Failed to save interactable profile {interactable_id}: {exc}") from exc
+
+        cache_key = str(path)
+        if cache_key in self._cache:
+            self._cache.pop(cache_key, None)
+        return data
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load a YAML config file with environment variable overrides."""
@@ -195,3 +254,31 @@ def list_monster_profiles() -> List[Dict[str, Any]]:
 def list_interface_profiles() -> List[Dict[str, Any]]:
     """List available interface profiles."""
     return get_config().list_interface_profiles()
+
+
+def load_interactable_profile(interactable_id: str) -> Dict[str, Any]:
+    """Load an interactable profile"""
+    return get_config().load_interactable_profile(interactable_id)
+
+
+def list_interactable_profiles() -> List[Dict[str, Any]]:
+    """List available interactable profiles."""
+    return get_config().list_interactable_profiles()
+
+
+def save_interactable_coords(
+    interactable_id: str,
+    *,
+    coords: Tuple[float, float],
+    roi_xy: Optional[Tuple[int, int]] = None,
+    screen_xy: Optional[Tuple[int, int]] = None,
+    element_index: int = 0,
+) -> Dict[str, Any]:
+    """Persist coordinates into an interactable profile."""
+    return get_config().save_interactable_coords(
+        interactable_id,
+        coords=coords,
+        roi_xy=roi_xy,
+        screen_xy=screen_xy,
+        element_index=element_index,
+    )

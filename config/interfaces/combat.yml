@@ -1,6 +1,9 @@
 id: combat
 name: "Combat HUD"
 attack_word: "Attack"
+attack_template: "assets/templates/attack_button.png"
+template_threshold: 0.9
+attack_template_threshold: 0.82
 prepare_targets:
   - "prepare"
   - "choose"

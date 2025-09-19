@@ -18,6 +18,7 @@ from bsbot.vision.detect import (
     detect_digits_ocr_multi,
     detect_template_multi,
     detect_word_ocr_multi,
+    derive_hitbox_from_word,
 )
 
 
@@ -26,9 +27,29 @@ class PlannedClick:
     x: int
     y: int
     label: str
+    action: str = "click"
+    source: str = ""
 
-    def to_tuple(self) -> Tuple[int, int, str]:
-        return self.x, self.y, self.label
+    def to_tuple(self) -> Tuple[int, int, str, str]:
+        return self.x, self.y, self.label, self.action
+
+
+@dataclass
+class HoverState:
+    tile: Optional[Tuple[int, int]] = None
+    active: bool = False
+    confirmed: bool = False
+    last_hover_ts: float = 0.0
+    last_detect_ts: float = 0.0
+    attempts: int = 0
+
+    def reset(self) -> None:
+        self.tile = None
+        self.active = False
+        self.confirmed = False
+        self.last_hover_ts = 0.0
+        self.last_detect_ts = 0.0
+        self.attempts = 0
 
 
 PHASE_STATE_DEFAULTS: Dict[str, str] = {
@@ -65,6 +86,10 @@ PHASE_SPECIAL_EVENTS: Dict[str, str] = {
 PHASE_TRANSITION_OVERRIDES: Dict[Tuple[str, str], str] = {
     ("BattleLoop", "Scan"): "Detect no fight remaining",
 }
+
+# Default ROIs for template matching (normalized x, y, w, h relative to frame).
+NAMEPLATE_TEMPLATE_ROI: Tuple[float, float, float, float] = (0.35, 0.15, 0.32, 0.20)
+ATTACK_TEMPLATE_ROI: Tuple[float, float, float, float] = (0.22, 0.10, 0.40, 0.24)
 
 
 class CombatController(SkillController):
@@ -110,6 +135,14 @@ class CombatController(SkillController):
         }
         self._last_transition_reason: Optional[str] = None
         self._last_nameplate_conf: float = 0.0
+        self._hover_state = HoverState()
+        self._floating_confidence: float = 0.0
+        self._min_nameplate_conf = 0.35
+        self._enable_tile_tracker = False
+        self.attack_template = None
+        self._template_threshold = 0.78
+        self._attack_template_threshold = 0.78
+        self.attack_template_path: Optional[str] = None
 
     # ------------------------------------------------------------------
     def on_start(self, params: Dict[str, object] | None = None) -> None:
@@ -132,6 +165,8 @@ class CombatController(SkillController):
         self._grid_signature = None
         self._tile_tracker.clear()
         self._last_tracked_tile = None
+        self._hover_state.reset()
+        self._floating_confidence = 0.0
 
     def on_stop(self) -> None:
         self._state = "Scan"
@@ -141,6 +176,8 @@ class CombatController(SkillController):
         self._grid_signature = None
         self._tile_tracker.clear()
         self._last_tracked_tile = None
+        self._hover_state.reset()
+        self._floating_confidence = 0.0
 
     def on_update_params(self, params: Dict[str, object] | None = None) -> None:
         if params:
@@ -159,9 +196,54 @@ class CombatController(SkillController):
             prefix = monster_profile.get("prefix")
         attack = monster_profile.get("attack_word") or interface_profile.get("attack_word") or self.attack_word
 
-        template = params.get("template_path")
-        if template is None:
-            template = monster_profile.get("template") or interface_profile.get("template") or self.runtime.status.template_path
+        template_override = params.get("template_override") or params.get("template_path")
+        template_default = params.get("template_default") or self.runtime.status.template_path
+        template_source = "default"
+        if template_override:
+            template = str(template_override)
+            template_source = "override"
+        else:
+            template = monster_profile.get("template")
+            if template:
+                template_source = "monster"
+            else:
+                template = interface_profile.get("template")
+                if template:
+                    template_source = "interface"
+                else:
+                    template = template_default
+                    template_source = "default"
+        if template:
+            template = str(template)
+        else:
+            template = None
+            template_source = "none"
+        self.runtime.status.template_path = template
+        setattr(self.runtime.status, "template_source", template_source)
+
+        attack_template = interface_profile.get("attack_template") or monster_profile.get("attack_template")
+        if params.get("attack_template"):
+            attack_template = params.get("attack_template")
+        thresh = params.get("template_threshold") or monster_profile.get("template_threshold") or interface_profile.get("template_threshold")
+        if thresh is not None:
+            try:
+                self._template_threshold = float(thresh)
+            except (TypeError, ValueError):
+                self._template_threshold = 0.78
+        attack_thresh = params.get("attack_template_threshold") or interface_profile.get("attack_template_threshold")
+        if attack_thresh is not None:
+            try:
+                self._attack_template_threshold = float(attack_thresh)
+            except (TypeError, ValueError):
+                self._attack_template_threshold = 0.78
+        if attack_template:
+            try:
+                self.attack_template = cv2.imread(attack_template, cv2.IMREAD_COLOR)
+            except Exception:
+                self.attack_template = None
+        else:
+            self.attack_template = None
+        self.attack_template_path = attack_template if isinstance(attack_template, str) else None
 
         tile_size = params.get("tile_size_px")
         if tile_size is None:
@@ -216,30 +298,71 @@ class CombatController(SkillController):
         rx, ry = ctx.roi_origin
         rw, rh = ctx.roi_size
         roi_rect = [rx, ry, rw, rh]
+        frame_h, frame_w = frame.shape[:2]
+        calibration = getattr(self.runtime, "calibration", None)
 
         boxes: List[Tuple[int, int, int, int]] = []
         best_conf = 0.0
         method = status.method
 
+        # Template first
         if method in {"auto", "template"} and status.template_path:
             tpl = cv2.imread(status.template_path, cv2.IMREAD_COLOR)
             if tpl is not None:
-                tpl_boxes, scores = detect_template_multi(frame, tpl)
-                boxes = tpl_boxes
-                best_conf = max(scores) if scores else 0.0
-                if method == "auto":
-                    method = "template" if boxes else "ocr_fallback"
-                else:
+                tpl_boxes = []
+                scores: List[float] = []
+                nameplate_roi = NAMEPLATE_TEMPLATE_ROI
+                if calibration:
+                    nameplate_roi = calibration.get_roi("nameplate", NAMEPLATE_TEMPLATE_ROI)
+                nx, ny, nw, nh = self._roi_pixels(frame_w, frame_h, nameplate_roi)
+                if nw >= tpl.shape[1] and nh >= tpl.shape[0]:
+                    roi_view = frame[ny : ny + nh, nx : nx + nw]
+                    tpl_boxes, scores = detect_template_multi(roi_view, tpl, threshold=self._template_threshold)
+                    tpl_boxes = [
+                        (bx + nx, by + ny, bw, bh)
+                        for (bx, by, bw, bh) in tpl_boxes
+                    ]
+                if not tpl_boxes:
+                    tpl_boxes, scores = detect_template_multi(frame, tpl, threshold=self._template_threshold)
+                if tpl_boxes:
+                    boxes = tpl_boxes
+                    best_conf = max(scores) if scores else 0.0
                     method = "template"
-
-        if not boxes and method in {"auto", "ocr"}:
-            boxes, best_conf = detect_word_ocr_multi(frame, target=self.word)
-            if method == "auto":
-                method = "ocr_fallback"
-            else:
+                    if calibration:
+                        calibration.template_success(
+                            "nameplate",
+                            best_conf,
+                            roi=nameplate_roi,
+                            box=tpl_boxes[0] if tpl_boxes else None,
+                        )
+        # OCR fallback
+        if not boxes and method in {"auto", "ocr", "template_fallback"}:
+            ocr_boxes, ocr_conf = detect_word_ocr_multi(frame, target=self.word)
+            if ocr_boxes:
+                boxes = ocr_boxes
                 method = "ocr"
+                if len(boxes) > 1:
+                    best_conf = 0.8
+                elif ocr_conf <= 0.01:
+                    best_conf = 0.5
+                else:
+                    best_conf = ocr_conf
+                if calibration and status.template_path and best_conf >= self._min_nameplate_conf:
+                    calibration.template_fallback(
+                        "nameplate",
+                        frame.copy(),
+                        template_path=status.template_path,
+                        hint_box=boxes[0],
+                        confidence=best_conf,
+                        state=self._state,
+                        phase=self.current_phase,
+                        roi_rect=roi_rect,
+                        boxes=boxes,
+                    )
 
-        attack_boxes, attack_conf = detect_word_ocr_multi(frame, target=self.attack_word)
+        attack_boxes: List[Tuple[int, int, int, int]] = []
+        attack_conf = 0.0
+        attack_source: Optional[str] = None
 
         prefix_boxes: List[Tuple[int, int, int, int]] = []
         prefix_conf = 0.0
@@ -247,14 +370,26 @@ class CombatController(SkillController):
             prefix_boxes, prefix_conf = detect_word_ocr_multi(frame, target=self.prefix_word)
 
         # Focused HUD regions ------------------------------------------------
-        apx, apy = int(0.55 * rw), int(0.20 * rh)
-        apw, aph = int(0.40 * rw), int(0.60 * rh)
-        ppx, ppy = int(0.55 * rw), int(0.07 * rh)
-        ppw, pph = int(0.43 * rw), int(0.86 * rh)
-        bbx, bby = int(0.10 * rw), int(0.83 * rh)
-        bbw, bbh = int(0.80 * rw), int(0.15 * rh)
-
+        attack_roi_norm = ATTACK_TEMPLATE_ROI
+        if calibration:
+            attack_roi_norm = calibration.get_roi("attack", ATTACK_TEMPLATE_ROI)
+        apx, apy, apw, aph = self._roi_pixels(frame_w, frame_h, attack_roi_norm)
         attack_panel_roi = frame[apy:apy + aph, apx:apx + apw]
+        if attack_panel_roi.size == 0:
+            apx = int(0.55 * frame_w)
+            apy = int(0.20 * frame_h)
+            apw = int(0.40 * frame_w)
+            aph = int(0.60 * frame_h)
+            attack_panel_roi = frame[apy:apy + aph, apx:apx + apw]
+
+        ppx = int(0.55 * frame_w)
+        ppy = int(0.07 * frame_h)
+        ppw = int(0.43 * frame_w)
+        pph = int(0.86 * frame_h)
+        bbx = int(0.10 * frame_w)
+        bby = int(0.83 * frame_h)
+        bbw = int(0.80 * frame_w)
+        bbh = int(0.15 * frame_h)
         # R1 focus: limit to monster + attack only for now
         # prepare_panel_roi = frame[ppy:ppy + pph, ppx:ppx + ppw]
         # bottom_bar_roi = frame[bby:bby + bbh, bbx:bbx + bbw]
@@ -295,11 +430,17 @@ class CombatController(SkillController):
                 else:
                     best_conf = self._last_nameplate_conf
         else:
-            if not prefix_present:
+            if not prefix_present and best_conf < self._min_nameplate_conf:
                 self._locked_box = None
             if not raw_nameplate_boxes:
                 self._target_lock_until = 0.0
                 lock_active = False
+
+        # Allow an OCR lock without prefix when confidence is high enough
+        if not lock_active and best_conf >= (self._min_nameplate_conf + 0.1):
+            self._locked_box = boxes[0] if boxes else None
+            self._target_lock_until = now + self._target_lock_grace
+            lock_active = True
 
         if raw_nameplate_boxes:
             self._confidence_history["nameplate"].append(best_conf)
@@ -310,11 +451,14 @@ class CombatController(SkillController):
 
         lock_remaining = max(0.0, self._target_lock_until - now)
 
-        target_ready = bool(boxes) and (not self.prefix_word or prefix_present or lock_active)
+        target_ready = bool(boxes) and best_conf >= self._min_nameplate_conf and (prefix_present or lock_active)
 
         tracker_info: Optional[Dict[str, object]] = None
         attack_context_rect: Optional[Tuple[int, int, int, int]] = None
-        if self._tile_size_px and self._tile_size_px > 0:
+        floating_boxes: List[Tuple[int, int, int, int]] = []
+        floating_conf = 0.0
+        world_tile: Optional[Tuple[int, int]] = None
+        if self._enable_tile_tracker and self._tile_size_px and self._tile_size_px > 0:
             if self._tile_grid is None or self._grid_signature != (rx, ry, rw, rh):
                 self._tile_grid = TileGrid(
                     self._tile_size_px,
@@ -328,7 +472,7 @@ class CombatController(SkillController):
             if grid:
                 timestamp = now
                 track = None
-                if boxes:
+                if boxes and best_conf >= self._min_nameplate_conf:
                     bx, by, bw, bh = boxes[0]
                     center_x = rx + bx + bw / 2
                     center_y = ry + by + bh / 2
@@ -354,34 +498,138 @@ class CombatController(SkillController):
                             )
                         self._last_tracked_tile = tracker_tile
                     adjacent = TileGrid.is_adjacent(self._player_tile, tracker_tile)
+                    base_world = self.runtime.status.world_tile if hasattr(self.runtime.status, "world_tile") else None
+                    if base_world and isinstance(base_world, (list, tuple)) and len(base_world) == 2:
+                        try:
+                            world_tile = (
+                                int(base_world[0] + (track.row - self._player_tile[0])),
+                                int(base_world[1] + (track.col - self._player_tile[1])),
+                            )
+                        except Exception:
+                            world_tile = None
                     attack_context_rect = grid.context_menu_rect(track.row, track.col)
+                    if adjacent:
+                        if self._hover_state.tile != tracker_tile:
+                            self._hover_state.tile = tracker_tile
+                            self._hover_state.confirmed = True
+                            self._hover_state.attempts = 0
+                        self._hover_state.active = True
+                    else:
+                        self._hover_state.reset()
+                    if attack_context_rect:
+                        ax, ay, aw, ah = attack_context_rect
+                        ax0 = max(0, ax)
+                        ay0 = max(0, ay)
+                        ax1 = min(rw, ax + aw)
+                        ay1 = min(rh, ay + ah)
+                        if ax1 > ax0 and ay1 > ay0:
+                            menu_roi = frame[ay0:ay1, ax0:ax1]
+                            local_boxes, local_conf = detect_word_ocr_multi(menu_roi, target=self.attack_word)
+                            attack_boxes = [
+                                (bx + ax0, by + ay0, bw, bh)
+                                for (bx, by, bw, bh) in local_boxes
+                            ]
+                            if attack_boxes:
+                                attack_source = "ocr_context"
+                                attack_conf = local_conf if local_conf > 0.01 else 0.6
+                        if not attack_boxes and self.attack_template is not None:
+                            search_regions: List[Tuple[str, np.ndarray, Tuple[int, int]]] = []
+                            if attack_panel_roi.size > 0:
+                                search_regions.append(("template_roi", attack_panel_roi, (apx, apy)))
+                            search_regions.append(("template", frame, (0, 0)))
+                            for region_label, region_img, (ox, oy) in search_regions:
+                                tpl_boxes, scores = detect_template_multi(
+                                    region_img,
+                                    self.attack_template,
+                                    threshold=self._attack_template_threshold,
+                                )
+                                if tpl_boxes:
+                                    attack_boxes = [
+                                        (bx + ox, by + oy, bw, bh)
+                                        for (bx, by, bw, bh) in tpl_boxes
+                                    ]
+                                    attack_source = region_label
+                                    attack_conf = max(scores) if scores else 0.7
+                                    break
+                    # Fallback to static HUD band on the right-hand side
+                    if not attack_boxes:
+                        local_boxes, local_conf = detect_word_ocr_multi(attack_panel_roi, target=self.attack_word)
+                        if local_boxes:
+                            attack_boxes = [
+                                (bx + apx, by + apy, bw, bh)
+                                for (bx, by, bw, bh) in local_boxes
+                            ]
+                            attack_source = "ocr_panel"
+                            attack_conf = local_conf if local_conf > 0.01 else 0.6
+                    # Global fallback: scan the whole combat frame for the attack button
+                    if not attack_boxes:
+                        global_boxes, global_conf = detect_word_ocr_multi(frame, target=self.attack_word)
+                        filtered: List[Tuple[int, int, int, int]] = []
+                        for (bx, by, bw, bh) in global_boxes:
+                            if bh < 15 or bw < 60:
+                                continue
+                            if by < int(0.15 * rh):
+                                continue
+                            filtered.append((bx, by, bw, bh))
+                        if filtered:
+                            attack_boxes = filtered
+                            attack_source = "ocr_global"
+                            attack_conf = global_conf if global_conf > 0.01 else 0.6
                     tracker_info = {
                         "row": track.row,
                         "col": track.col,
                         "adjacent": adjacent,
                         "player_tile": list(self._player_tile),
                         "confidence": track.confidence,
+                        "velocity": [track.vx, track.vy],
+                        "hover_confirmed": bool(self._hover_state.confirmed),
+                        "world_tile": list(world_tile) if world_tile else None,
+                        "floating_confidence": self._floating_confidence,
                     }
-                    if attack_context_rect:
-                        ax, ay, aw, ah = attack_context_rect
-                        filtered_boxes: List[Tuple[int, int, int, int]] = []
-                        for (bx, by, bw, bh) in attack_boxes:
-                            if bx >= ax and by >= ay and (bx + bw) <= ax + aw and (by + bh) <= ay + ah:
-                                filtered_boxes.append((bx, by, bw, bh))
-                        if filtered_boxes:
-                            attack_boxes = filtered_boxes
+                else:
+                    self._hover_state.reset()
+                    self._floating_confidence = 0.0
+        else:
+            self._hover_state.reset()
+            self._floating_confidence = 0.0
 
         planned_clicks: List[PlannedClick] = []
+        if attack_boxes and attack_source and attack_source.startswith("template") and calibration:
+            attack_roi_norm_to_log = attack_roi_norm if 'attack_roi_norm' in locals() else ATTACK_TEMPLATE_ROI
+            calibration.template_success(
+                "attack",
+                attack_conf,
+                roi=attack_roi_norm_to_log,
+                box=attack_boxes[0],
+            )
+        elif (
+            attack_boxes
+            and attack_source
+            and attack_source.startswith("ocr")
+            and calibration
+            and self.attack_template_path
+        ):
+            calibration.template_fallback(
+                "attack",
+                frame.copy(),
+                template_path=self.attack_template_path,
+                hint_box=attack_boxes[0],
+                confidence=attack_conf,
+                state=self._state,
+                phase=self.current_phase,
+                roi_rect=roi_rect,
+                boxes=attack_boxes,
+            )
         if target_ready and boxes:
             bx, by, bw, bh = boxes[0]
             cx = rx + bx + bw // 2
             cy = ry + by + int(1.4 * bh)
             planned_clicks.append(PlannedClick(cx, cy, "prime_nameplate"))
         if attack_boxes:
-            bx, by, bw, bh = attack_boxes[0]
-            cx = rx + bx + bw // 2
-            cy = ry + by + bh // 2
-            planned_clicks.append(PlannedClick(cx, cy, "attack_button"))
+            planned_clicks.append(self._adjust_attack_click(attack_boxes[0], (rx, ry), attack_source))
+            self._confidence_history["attack_button"].append(attack_conf)
+        else:
+            self._floating_confidence = floating_conf if floating_conf > 0 else self._floating_confidence
         # Do not plan weapon clicks until that phase is implemented
 
         self._emit_detection_events(
@@ -407,10 +655,48 @@ class CombatController(SkillController):
         self._advance_state(target_ready, attack_boxes, prepare_boxes, digit_boxes, special_attacks_present, planned_clicks, roi_rect, lock_active, prefix_present)
 
         annotated = frame.copy()
+        nameplate_color = (0, 0, 255)
+        nameplate_label = "OCR"
+        if method and method.startswith("template"):
+            nameplate_color = (180, 0, 255)
+            nameplate_label = "TPL"
         for (bx, by, bw, bh) in boxes:
-            cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (0, 0, 255), 2)
+            cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), nameplate_color, 2)
+            cv2.putText(
+                annotated,
+                nameplate_label,
+                (bx, max(12, by - 6)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                nameplate_color,
+                1,
+                cv2.LINE_AA,
+            )
+        attack_color = (0, 255, 0)
+        attack_label = "OCR"
+        if attack_source and attack_source.startswith("template"):
+            attack_color = (0, 255, 255)
+            attack_label = "TPL"
+        elif attack_source == "ocr_context":
+            attack_label = "OCR ctx"
+        elif attack_source == "ocr_panel":
+            attack_label = "OCR panel"
+        elif attack_source == "ocr_global":
+            attack_label = "OCR global"
         for (bx, by, bw, bh) in attack_boxes:
-            cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
+            cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), attack_color, 2)
+            cv2.putText(
+                annotated,
+                attack_label,
+                (bx, max(12, by - 6)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                attack_color,
+                1,
+                cv2.LINE_AA,
+            )
+        for (bx, by, bw, bh) in floating_boxes:
+            cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (255, 128, 0), 1)
         for (bx, by, bw, bh) in prepare_boxes:
             cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (255, 0, 0), 2)
         for (bx, by, bw, bh) in spec_boxes + atks_boxes:
@@ -423,7 +709,22 @@ class CombatController(SkillController):
         for planned in planned_clicks:
             fx = planned.x - rx
             fy = planned.y - ry
-            cv2.drawMarker(annotated, (int(fx), int(fy)), (255, 0, 255), markerType=cv2.MARKER_CROSS, markerSize=12, thickness=2)
+            color = (255, 0, 255)
+            if planned.label == "attack_button":
+                color = (0, 255, 255) if planned.source == "template" else (0, 128, 255)
+            cv2.drawMarker(annotated, (int(fx), int(fy)), color, markerType=cv2.MARKER_CROSS, markerSize=12, thickness=2)
+            cv2.circle(annotated, (int(fx), int(fy)), 14, color, 1)
+            label_text = planned.label.replace("_", " ")
+            cv2.putText(
+                annotated,
+                label_text,
+                (int(fx) + 8, int(fy) + 14),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
 
         # Overlay recent real clicks (within ~1s)
         for click in self.runtime.get_recent_clicks():
@@ -469,6 +770,7 @@ class CombatController(SkillController):
                 "confidence": attack_conf,
                 "boxes": attack_boxes,
                 "word": self.attack_word,
+                "source": attack_source,
             },
             "prepare": {
                 "found": bool(prepare_boxes),
@@ -495,6 +797,14 @@ class CombatController(SkillController):
                 "boxes": prefix_boxes,
                 "word": self.prefix_word,
             },
+            "hover": {
+                "active": bool(self._hover_state.active) if self._hover_state else False,
+                "confirmed": bool(self._hover_state.confirmed) if self._hover_state else False,
+                "tile": list(self._hover_state.tile) if self._hover_state.tile else None,
+                "attempts": self._hover_state.attempts,
+                "floating_confidence": self._floating_confidence,
+                "boxes": floating_boxes,
+            },
             "target_lock": {
                 "active": bool(lock_active),
                 "remaining_s": lock_remaining,
@@ -508,7 +818,7 @@ class CombatController(SkillController):
                 "attack_button": list(self._confidence_history["attack_button"]),
             },
             "planned_clicks": [
-                {"x": planned.x, "y": planned.y, "label": planned.label}
+                {"x": planned.x, "y": planned.y, "label": planned.label, "action": planned.action}
                 for planned in planned_clicks
             ],
             "total_detections": status.total_detections,
@@ -547,15 +857,17 @@ class CombatController(SkillController):
         should_emit_nameplate = bool(boxes) and (not self.prefix_word or prefix_present or lock_active)
         if should_emit_nameplate:
             self._set_phase(PHASE_DETECT_EVENTS["nameplate"])
+            phase_label = PHASE_DETECT_EVENTS["nameplate"]
             notes = (
-                f"lock={int(lock_active)} remaining={lock_remaining:.2f}s prefix={int(prefix_present)} "
-                f"prime_attempts={self._click_attempts.get('prime_nameplate', 0)}"
+                f"{phase_label} | lock={int(lock_active)} remaining={lock_remaining:.2f}s "
+                f"prefix={int(prefix_present)} prime_attempts={self._click_attempts.get('prime_nameplate', 0)}"
             )
             self.runtime.emit_event("detect", "nameplate", roi_rect, boxes, best_conf, state=self._state, phase=self.current_phase, notes=notes)
         if attack_boxes:
             self._set_phase(PHASE_DETECT_EVENTS["attack_button"])
+            phase_label = PHASE_DETECT_EVENTS["attack_button"]
             notes = (
-                f"lock={int(lock_active)} remaining={lock_remaining:.2f}s "
+                f"{phase_label} | lock={int(lock_active)} remaining={lock_remaining:.2f}s "
                 f"attack_attempts={self._click_attempts.get('attack_button', 0)}"
             )
             self.runtime.emit_event("detect", "attack_button", roi_rect, attack_boxes, attack_conf, state=self._state, phase=self.current_phase, notes=notes)
@@ -579,22 +891,53 @@ class CombatController(SkillController):
         runtime = self.runtime
         click_tuples = [pc.to_tuple() for pc in planned_clicks]
 
+        if self._hover_state and any(pc.label == "hover_tile" and pc.action == "hover" for pc in planned_clicks):
+            now = time.time()
+            if now - self._hover_state.last_hover_ts > 0.3:
+                runtime.emit_click(
+                    click_tuples,
+                    "hover_tile",
+                    state=self._state,
+                    phase=self.current_phase,
+                    notes=self.current_phase,
+                )
+                self._hover_state.last_hover_ts = now
+                self._hover_state.attempts += 1
+
         if self._state == "Scan":
             if target_ready:
                 self._increment_click_attempt("prime_nameplate")
                 self._set_phase(PHASE_CLICK_EVENTS["prime_nameplate"])
-                runtime.emit_click(click_tuples, "prime_nameplate", state=self._state, phase=self.current_phase)
+                runtime.emit_click(
+                    click_tuples,
+                    "prime_nameplate",
+                    state=self._state,
+                    phase=self.current_phase,
+                    notes=self.current_phase,
+                )
                 self._transition("PrimeTarget", notes="nameplate locked")
         elif self._state == "PrimeTarget":
             if attack_boxes:
                 self._increment_click_attempt("attack_button")
                 self._set_phase(PHASE_CLICK_EVENTS["attack_button"])
-                runtime.emit_click(click_tuples, "attack_button", state=self._state, phase=self.current_phase)
+                runtime.emit_click(
+                    click_tuples,
+                    "attack_button",
+                    state=self._state,
+                    phase=self.current_phase,
+                    notes=self.current_phase,
+                )
                 self._transition("AttackPanel", notes="attack detected")
             elif target_ready:
                 self._increment_click_attempt("prime_nameplate")
                 self._set_phase(PHASE_CLICK_EVENTS["prime_nameplate"])
-                runtime.emit_click(click_tuples, "prime_nameplate", state=self._state, phase=self.current_phase)
+                runtime.emit_click(
+                    click_tuples,
+                    "prime_nameplate",
+                    state=self._state,
+                    phase=self.current_phase,
+                    notes=self.current_phase,
+                )
             else:
                 if lock_active:
                     reason = "target lost (lock active but no nameplate)"
@@ -607,7 +950,13 @@ class CombatController(SkillController):
             if attack_boxes:
                 self._increment_click_attempt("attack_button")
                 self._set_phase(PHASE_CLICK_EVENTS["attack_button"])
-                runtime.emit_click(click_tuples, "attack_button", state=self._state, phase=self.current_phase)
+                runtime.emit_click(
+                    click_tuples,
+                    "attack_button",
+                    state=self._state,
+                    phase=self.current_phase,
+                    notes=self.current_phase,
+                )
             elif prepare_boxes:
                 self._transition("Prepare", notes="prepare detected")
             else:
@@ -615,7 +964,13 @@ class CombatController(SkillController):
         elif self._state == "Prepare":
             if digit_boxes:
                 self._set_phase(PHASE_CLICK_EVENTS["weapon_1"])
-                runtime.emit_click(click_tuples, "weapon_1", state=self._state, phase=self.current_phase)
+                runtime.emit_click(
+                    click_tuples,
+                    "weapon_1",
+                    state=self._state,
+                    phase=self.current_phase,
+                    notes=self.current_phase,
+                )
                 self._transition("Weapon", notes="weapon digit detected")
             elif not prepare_boxes:
                 self._transition("Scan", notes="prepare panel missing")
@@ -631,7 +986,8 @@ class CombatController(SkillController):
                 self._absent_counter += 1
                 if self._absent_counter >= 6:
                     self._set_phase(PHASE_SPECIAL_EVENTS["battle_end"])
-                    runtime.emit_event("transition", "battle_end", roi_rect, [], 0.0, state=self._state, phase=self.current_phase, notes="absent M=6 frames")
+                    notes = f"{PHASE_SPECIAL_EVENTS['battle_end']} | absent M=6 frames"
+                    runtime.emit_event("transition", "battle_end", roi_rect, [], 0.0, state=self._state, phase=self.current_phase, notes=notes)
                     self._transition("Scan", notes="battle loop ended (missing cues)")
 
     def _transition(self, new_state: str, *, notes: Optional[str] = None) -> None:
@@ -733,7 +1089,48 @@ class CombatController(SkillController):
         hh = max(1, min(h - y, hh))
         return img[y : y + hh, x : x + ww]
 
+    @staticmethod
+    def _roi_pixels(width: int, height: int, rel: Tuple[float, float, float, float]) -> Tuple[int, int, int, int]:
+        rx, ry, rw, rh = rel
+        x = int(round(rx * width))
+        y = int(round(ry * height))
+        w_px = max(1, int(round(rw * width)))
+        h_px = max(1, int(round(rh * height)))
+        if x < 0:
+            x = 0
+        if y < 0:
+            y = 0
+        if x >= width:
+            x = width - 1
+        if y >= height:
+            y = height - 1
+        if x + w_px > width:
+            w_px = max(1, width - x)
+        if y + h_px > height:
+            h_px = max(1, height - y)
+        return x, y, w_px, h_px
+
     # Utilities -----------------------------------------------------------
     @property
     def state(self) -> str:
         return self._state
+    def _adjust_attack_click(
+        self,
+        box: Tuple[int, int, int, int],
+        roi_origin: Tuple[int, int],
+        source: Optional[str],
+    ) -> PlannedClick:
+        bx, by, bw, bh = box
+        adj_x = bx + bw // 2
+        adj_y = by + bh // 2
+        if source and source.startswith("ocr"):
+            hx, hy, hw, hh = derive_hitbox_from_word((bx, by, bw, bh))
+            if hw > 0 and hh > 0:
+                adj_x = hx + hw // 2
+                adj_y = hy + hh // 2
+        return PlannedClick(
+            roi_origin[0] + adj_x,
+            roi_origin[1] + adj_y,
+            "attack_button",
+            source=source or "",
+        )

@@ -35,6 +35,14 @@ detection_method: "auto"
 confidence_threshold: 0.75
 log_level: "INFO"
 debug_enabled: false
+compass_auto_align: true
+compass:
+  roi: [0.88, 0.04, 0.1, 0.1]
+  rotate_keys: ["left", "right"]
+  align_threshold_deg: 4.0
+minimap:
+  toggle_key: "m"
+  anchor_interval_s: 30.0
 
 # Production safety settings
 input_delay_ms: 200
@@ -122,6 +130,14 @@ if ($status.last_result.count -eq 0) {
     Write-Host "WARNING: No detections in last cycle" -ForegroundColor Yellow
 }
 
+if ($status.compass.enabled -and [math]::Abs($status.compass.angle) -gt 10) {
+    Write-Host "WARNING: Compass drift detected (>10°)" -ForegroundColor Yellow
+}
+
+if ($status.world_tile -eq $null) {
+    Write-Host "INFO: World tile anchor pending" -ForegroundColor Cyan
+}
+
 Write-Host "OK: Bot is healthy" -ForegroundColor Green
 "@
 
@@ -151,6 +167,8 @@ Register-ScheduledTask -TaskName "GameBot-HealthCheck" -Action $action -Trigger 
 - **Error Rate:** Frequency of detection failures
 - **Click Success Rate:** Percentage of successful input actions
 - **False Positive Rate:** Incorrect detections per hour
+- **Compass Drift:** Current `/api/status.compass.angle`; should remain within ±5° after alignment.
+- **World Tile Anchor Age:** Time since `/api/status.minimap.last_anchor`; anchors older than 60 s should trigger a minimap refresh.
 
 ### Log Analysis
 
@@ -190,6 +208,8 @@ Get-Content C:\gameBot\logs\app.log | Select-String -Pattern "detect.*found=True
 # Timeline analysis
 Get-Content C:\gameBot\logs\app.log | Select-String -Pattern "transition" | Select-Object -Last 20
 ```
+
+> Logging rotation: Every bot start forces a rollover of `logs\app.log`. Up to five historical runs (`app.log.1` … `app.log.5`) are retained automatically by the RotatingFileHandler.
 
 ## 🔧 Maintenance Procedures
 
@@ -264,6 +284,11 @@ print(f'Valid template: {img.shape}')
 # Test updated template
 python -m bsbot.tools.detect_cli --test-window --template "assets/templates/updated_enemy.png"
 ```
+
+### Calibration Artifacts
+- Automatic ROI calibration writes each run to `logs/calibration/<timestamp>_{nameplate|attack}/` with `frame.png` and `calibration.json`.
+- Timeline events (`calibration|*_capture`, `calibration|*_apply`, `calibration|*_error`) mirror the lifecycle; `/api/status.calibration` reports the active overrides and last capture folder.
+- No automated pruning is performed—delete timestamped folders when you want to reclaim disk space or reset a calibration.
 
 ## 🔒 Security Considerations
 

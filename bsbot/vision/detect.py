@@ -237,17 +237,35 @@ def _nms(boxes: List[Tuple[int,int,int,int]], scores: List[float], iou_thresh: f
 def detect_template_multi(bgr: np.ndarray, template_bgr: np.ndarray, threshold: float = 0.78, max_instances: int = 10) -> Tuple[List[Tuple[int,int,int,int]], List[float]]:
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     tpl_gray = cv2.cvtColor(template_bgr, cv2.COLOR_BGR2GRAY)
+
+    candidates: List[Tuple[int, int, int, int]] = []
+    candidate_scores: List[float] = []
+
+    def _collect(res: np.ndarray, tpl_shape: Tuple[int, int]) -> None:
+        if res is None:
+            return
+        ys, xs = np.where(res >= threshold)
+        h, w = tpl_shape
+        for y, x in zip(ys, xs):
+            candidates.append((int(x), int(y), int(w), int(h)))
+            candidate_scores.append(float(res[y, x]))
+
+    # Raw grayscale correlation
+    res_gray = cv2.matchTemplate(gray, tpl_gray, cv2.TM_CCOEFF_NORMED)
+    _collect(res_gray, tpl_gray.shape[:2])
+
+    # Edge-based correlation (helps with stronger outline matches)
     edges = cv2.Canny(gray, 80, 160)
     tpl_edges = cv2.Canny(tpl_gray, 80, 160)
-    res = cv2.matchTemplate(edges, tpl_edges, cv2.TM_CCOEFF_NORMED)
-    ys, xs = np.where(res >= threshold)
-    h, w = tpl_edges.shape[:2]
-    boxes = [(int(x), int(y), int(w), int(h)) for y, x in zip(ys, xs)]
-    scores = [float(res[y, x]) for y, x in zip(ys, xs)]
-    # Apply NMS
-    keep = _nms(boxes, scores, iou_thresh=0.5)
-    boxes = [boxes[i] for i in keep][:max_instances]
-    scores = [scores[i] for i in keep][:max_instances]
+    res_edges = cv2.matchTemplate(edges, tpl_edges, cv2.TM_CCOEFF_NORMED)
+    _collect(res_edges, tpl_edges.shape[:2])
+
+    if not candidates:
+        return [], []
+
+    keep = _nms(candidates, candidate_scores, iou_thresh=0.5)
+    boxes = [candidates[i] for i in keep][:max_instances]
+    scores = [candidate_scores[i] for i in keep][:max_instances]
     return boxes, scores
 
 

@@ -1,17 +1,20 @@
 # Current Status
 
-Updated: Tile-aware detection groundwork in progress
+Updated: Tile-aware detection, compass alignment, and minimap anchoring shipped
 
 ## Executive Summary
-**GROC5 Implementation Phase Successfully Completed**
+**R1 Tile-Aware Detection Milestone Complete**
 
-- ✅ **REORG Phase**: Complete package restructuring (4/4 tasks)
-- ✅ **R0 Phase**: UI enhancements and detection improvements (2/3 tasks)
-- ✅ **UI Modernization**: Contemporary dark theme with professional UX
-- ✅ **Code Quality**: All changes committed, tested, and documented
+- ✅ **Compass + Minimap Automation**: Auto-normalise orientation and refresh world tile anchors.
+- ✅ **Tile Tracker & Hover Workflow**: Screen/tile calibration, hover gating, and context ROI enforcement in combat.
+- ✅ **Telemetry Upgrade**: `/api/status` surfaces compass, minimap, tracker, and hover state for monitoring.
+- ✅ **Docs & Tests**: Detection/Architecture/Operations refreshed; tile calibration unit tests in place.
 
 ## What Works (Production Ready)
+- **Compass-Normalised Detection**: Auto-align camera to North before every run, with drift monitoring.
+- **Tile-Aware Combat Loop**: Tile tracker, hover confirmation, and context-menu ROI keep clicks precise.
 - **Complete Detection Pipeline**: Template + OCR with intelligent method selection
+- **Self-Calibrating Templates**: Automatic ROI capture, background sweeps, and override persistence keep template matching aligned without manual screenshots.
 - **Modern Web Interface**: Professional dark theme, responsive design, real-time updates
 - **Robust Architecture**: Clean package structure, import shims, backward compatibility
 - **Computer Vision**: Advanced OCR with NMS deduplication and size filtering
@@ -20,9 +23,9 @@ Updated: Tile-aware detection groundwork in progress
 
 ## Technical Achievements
 - **Package Restructuring**: Migrated from flat `src/` to layered `bsbot/` architecture
-- **UI Separation**: Extracted embedded HTML to clean template system
-- **Detection Enhancement**: OCR deduplication with size/aspect ratio filtering
-- **Method Selection**: Dynamic Template/OCR/Auto detection modes
+- **Detection Enhancements**: OCR deduplication, hover OCR micro-pass, and context ROI enforcement
+- **Navigation Primitives**: Compass/minimap managers and tile calibration helpers with unit tests
+- **Telemetry Expansion**: `/api/status` exposes hover state, compass angles, minimap anchors, and world tiles
 - **Modern Interface**: CSS Grid, custom properties, smooth animations, responsive design
 - **Modular Skills**: Runtime delegates frames to pluggable skill controllers (combat implemented first) with shared input/detection primitives
 
@@ -31,13 +34,13 @@ Updated: Tile-aware detection groundwork in progress
 - **Real-time Monitoring**: Live status, preview, logs with professional UI
 - **Safety Controls**: Start/Pause/Stop with visual feedback and hotkeys
 - **Configuration System**: Profile, keys, monster/interface YAML configurations
-- **API Endpoints**: RESTful status, control, and diagnostic endpoints
+- **API Endpoints**: RESTful status, control, and diagnostic endpoints (now include compass/minimap blocks)
+- **Compass & Minimap Automation**: Configurable ROI, keybinds, and sample cadence for drift-free orientation.
 
 ## Known Limitations (Current Focus)
-- Compass not yet auto-normalised; camera rotation still manual.
-- Tile tracker + hover workflow under development (see tasks R1-5 → R1-9).
-- Minimap anchoring and global navigation pending (R1-10).
-- Input driver still in design stage (R1-2).
+- Input driver upgrades (keyboard combos, drag/hold) still pending (R1-2).
+- Loot pickup, engage loop, and skilling features remain scoped for future phases.
+- Navigation beyond local tile offsets (pathfinding/waypointing) is not yet implemented.
 
 ## Performance Metrics
 - **Detection Accuracy**: Template detection with NMS deduplication
@@ -64,17 +67,9 @@ scripts\serve.ps1 -Port 8083 -LogLevel INFO
 - ✅ **Code Review Ready**: Clean, well-structured, production-ready code
 
 ## Next Phase Readiness
-- Execute the Detection & Navigation roadmap (R1-5 … R1-11) to deliver tile-aware combat.
-- Coordinate with Groc5fast on input driver + loot pickup once tile tracking stabilises.
-
-## Combat Detection Phase Plan
-- **Compass Normalisation** — R1-5
-- **Screen Tile Calibration** — R1-6
-- **Tile Tracker Prototype** — R1-7
-- **Hover + Floating Attack Confirmation** — R1-8
-- **Context Menu ROI Refinement** — R1-9
-- **Minimap Anchoring & Navigation Hooks** — R1-10
-- **Telemetry + Documentation** — R1-11
+- Integrate live combat automation (input driver, engage loop, loot) now that detection clicks are tile-safe.
+- Extend navigation from local tile offsets to planned waypointing using minimap anchors.
+- Continue collaboration with Groc5fast on input driver (R1-2) and loot pipeline (R1-4).
 
 ## Final Status
 **GROC5 Implementation Phase: COMPLETE ✅**
@@ -86,4 +81,4 @@ The Brighter Shores automation framework now has:
 - Comprehensive documentation
 - Production-ready code quality
 
-**Ready for R1 development and beyond!** 🚀
+**Ready for live combat automation and navigation!** 🚀

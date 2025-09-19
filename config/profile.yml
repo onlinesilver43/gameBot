@@ -38,6 +38,21 @@ tile_origin_px: [0, 0]
 player_tile_offset: [0.5, 0.5]
 compass_auto_align: false
 
+compass:
+  roi: [0.88, 0.04, 0.1, 0.1]
+  align_threshold_deg: 5.0
+  drift_threshold_deg: 8.0
+  sample_interval_s: 2.5
+  rotate_keys: ["left", "right"]
+  rotation_rate_deg_s: 150.0
+  rotation_hold_s: 0.18
+
+minimap:
+  toggle_key: "m"
+  roi: [0.74, 0.1, 0.22, 0.32]
+  coords_roi: [0.79, 0.42, 0.16, 0.1]
+  anchor_interval_s: 45.0
+
 # Profile Defaults
 default_monster: "twisted_wendigo"
 default_interface: "combat"

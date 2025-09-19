@@ -30,7 +30,7 @@ def init_logging(log_dir: str | None = None, level: str | int = "INFO") -> loggi
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    file_handler = RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+    file_handler = RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8")
     file_handler.setFormatter(fmt)
     file_handler.setLevel(level)
 
@@ -44,4 +44,3 @@ def init_logging(log_dir: str | None = None, level: str | int = "INFO") -> loggi
 
     logger.debug("Logging initialized at level %s; file=%s", level, log_path)
     return logger
-

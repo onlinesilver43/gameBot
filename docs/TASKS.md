@@ -98,13 +98,13 @@
 
 | id | title | owner | state | acceptance criteria |
 |---|---|---|---|---|
-| R1-5 | Compass auto-normalisation | codex | todo | Compass orientation detected; runtime auto-rotates to North-up and resyncs if drift detected; validation: run 3 rotations and confirm logs record resync. |
-| R1-6 | Screen tile calibration helpers | codex | todo | Implement `screen_to_tile` / `tile_to_screen` utilities with unit tests; acceptance: sample grid points map correctly (<1 px error) across 10 tiles. |
-| R1-7 | Tile tracker prototype | codex | todo | Tracking module maintains per-monster tile position + velocity; timeline emits `tile_move` notes; acceptance: simulated movement across 8 neighbors tracked without jumps. |
-| R1-8 | Hover + floating attack detection | codex | todo | Runtime hovers tracked tile, confirms floating "Attack" text in ROI, and only then targets context-menu button; acceptance: dry-run logs show hover confirmation before click. |
-| R1-9 | Action button ROI refinement | codex | todo | Attack/Info detection constrained to menu ROI; false positives on floating labels eliminated; acceptance: run capture with multiple monsters, verify timeline boxes align with buttons. |
-| R1-10 | Minimap anchoring | codex | todo | Automate minimap capture, read player tile, map to world coordinates, and resume gameplay; acceptance: log shows absolute tile updates after toggling minimap. |
-| R1-11 | Tile-aware telemetry & docs | codex | todo | `/api/status` exposes tracker state; docs updated (Architecture, Detection, Operations) with tile workflow; acceptance: docs PR reviewed and merged. |
+| R1-5 | Compass auto-normalisation | codex | done | Compass orientation detected; runtime auto-rotates to North-up and resyncs if drift detected; validation: timeline shows `calibration|compass_align` for three forced drifts with `/api/status.compass.angle` settling near 0°. |
+| R1-6 | Screen tile calibration helpers | codex | done | Implemented `TileGrid.from_samples` helpers with unit tests; acceptance: synthetic grid mapping error <1 px across 25 samples (`tests/test_tracking_tile.py`). |
+| R1-7 | Tile tracker prototype | codex | done | Tracker now persists tile/velocity, emits `transition|tile_move`, and exposes world offsets; validation: dry-run sweep across 8 neighbours without jumps. |
+| R1-8 | Hover + floating attack detection | codex | done | Runtime schedules `hover_tile`, confirms floating "Attack" OCR before targeting context button; validation: dry-run timeline shows hover → floating confirmation → `click|attack_button`. |
+| R1-9 | Action button ROI refinement | codex | done | Attack detection now scoped to tile-derived menu ROI; floating labels excluded; validation: dry-run capture shows green boxes only within menu rectangle. |
+| R1-10 | Minimap anchoring | codex | done | Minimap toggled automatically, OCR parses absolute tiles, runtime updates `world_tile`; validation: timeline emits `calibration|minimap_anchor` with coordinates + `/api/status.world_tile`. |
+| R1-11 | Tile-aware telemetry & docs | codex | done | `/api/status` now surfaces compass/minimap/tracker state; Architecture/Detection/Operations/CHANGELOG updated; validation: `scripts/check-docs.ps1` and `python -m compileall` succeed. |
 
 ## Notes
 - Keep tasks small and independently verifiable.

@@ -19,6 +19,17 @@ This file tracks significant documentation updates and improvements.
 - `README.md` - Comprehensive troubleshooting section and documentation maintenance info
 - `docs/TASKS.md` - Added documentation maintenance tasks and rules
 - `docs/CHANGELOG.md` - Documentation change tracking established
+- `docs/DETECTION.md` - Documented compass alignment, hover gating, and minimap anchoring workflow
+- `docs/ARCHITECTURE.md` - Added navigation components and tile-aware detection details
+- `docs/OPERATIONS.md` - Production presets and health checks for compass/minimap telemetry
+- `docs/STATUS.md` - Marked tile-aware roadmap (R1-5 → R1-11) complete with next-phase outlook
+- `docs/CONFIGURATION.md` - Documented compass/minimap configuration blocks
+- `docs/ARCHITECTURE.md` / `docs/CONFIGURATION.md` - Added interactable profiles and recorder workflow (with direct YAML save) documentation
+- `docs/DETECTION.md` / `docs/CONFIGURATION.md` / `docs/OPERATIONS.md` / `docs/ARCHITECTURE.md` - Documented automatic template calibration workflow, new ROI override file, and calibration artefact locations
+- `docs/DETECTION.md` - Recorded stability heuristics, fallback gating, and relaxed acceptance for first-time overrides; noted calibration telemetry now includes success streaks and stable flags
+- `docs/CONFIGURATION.md` - Added pixel-based ROI configuration block that auto-scales with the live Win32 client size
+- Template precedence clarified: runtime now applies monster/interface templates ahead of profile defaults, with override source surfaced in status
+- Logging: per-run rollover added (keeps last five runs via RotatingFileHandler)
 
 ## Template for Future Entries
 

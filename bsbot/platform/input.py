@@ -21,6 +21,20 @@ else:  # pragma: no cover
 MOUSEEVENTF_MOVE = 0x0001
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
+KEYEVENTF_KEYUP = 0x0002
+
+VK_MAP = {
+    "left": 0x25,
+    "up": 0x26,
+    "right": 0x27,
+    "down": 0x28,
+    "home": 0x24,
+    "end": 0x23,
+    "pageup": 0x21,
+    "pagedown": 0x22,
+    "insert": 0x2D,
+    "delete": 0x2E,
+}
 
 logger = logging.getLogger("bot.input")
 
@@ -54,6 +68,69 @@ def _linear_move(start: Tuple[int, int], end: Tuple[int, int], duration: float) 
         ny = int(round(sy + (ey - sy) * t))
         _set_cursor_pos(nx, ny)
         time.sleep(duration / steps)
+
+
+def _resolve_vk(key: str) -> int:
+    k = key.strip().lower()
+    if not k:
+        raise ValueError("Key cannot be empty")
+    if k in VK_MAP:
+        return VK_MAP[k]
+    if len(k) == 1:
+        return ord(k.upper())
+    raise ValueError(f"Unsupported key: {key}")
+
+
+def _key_down(vk: int) -> None:
+    _ensure_available()
+    user32.keybd_event(vk, 0, 0, 0)  # type: ignore[arg-type]
+
+
+def _key_up(vk: int) -> None:
+    _ensure_available()
+    user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)  # type: ignore[arg-type]
+
+
+def human_move(
+    point: Tuple[int, int],
+    *,
+    jitter_px: int = 4,
+    move_duration: float = 0.12,
+    hwnd: Optional[int] = None,
+    ensure_foreground: bool = True,
+) -> None:
+    """Move the cursor towards ``point`` without clicking."""
+
+    _ensure_available()
+
+    from bsbot.platform.win32 import window as win
+
+    if hwnd and ensure_foreground:
+        try:
+            if win.get_foreground_window() != hwnd:
+                win.bring_to_foreground(hwnd)
+                time.sleep(0.05)
+        except Exception:
+            logger.exception("Unable to ensure foreground window before move")
+
+    jitter_x = random.uniform(-jitter_px, jitter_px) if jitter_px else 0.0
+    jitter_y = random.uniform(-jitter_px, jitter_px) if jitter_px else 0.0
+    target_x = int(round(point[0] + jitter_x))
+    target_y = int(round(point[1] + jitter_y))
+
+    current_pos = win.get_cursor_pos()
+    _linear_move(current_pos, (target_x, target_y), max(0.0, move_duration))
+    logger.info("move | x=%d y=%d jitter=(%.2f,%.2f)", target_x, target_y, jitter_x, jitter_y)
+
+
+def human_keypress(key: str, hold: float = 0.1) -> None:
+    """Press and release a keyboard key with optional hold duration."""
+
+    vk = _resolve_vk(key)
+    _key_down(vk)
+    time.sleep(max(0.0, hold))
+    _key_up(vk)
+    logger.info("keypress | key=%s hold=%.3f", key, hold)
 
 
 def human_click(
@@ -103,4 +180,4 @@ def human_click(
     logger.info("click | x=%d y=%d jitter=(%.2f,%.2f)", target_x, target_y, jitter_x, jitter_y)
 
 
-__all__ = ["human_click"]
+__all__ = ["human_click", "human_keypress", "human_move"]

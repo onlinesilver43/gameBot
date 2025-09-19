@@ -1,0 +1,10 @@
+import cv2
+shot = cv2.imread('assets/screenshots/screenshot_without_minimap_wendigo_attackButton.png')
+tpl = cv2.imread('assets/templates/wendigo2.png')
+shot_gray = cv2.cvtColor(shot, cv2.COLOR_BGR2GRAY)
+tpl_gray = cv2.cvtColor(tpl, cv2.COLOR_BGR2GRAY)
+edges = cv2.Canny(shot_gray, 80, 160)
+tpl_edges = cv2.Canny(tpl_gray, 80, 160)
+res = cv2.matchTemplate(edges, tpl_edges, cv2.TM_CCOEFF_NORMED)
+min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+print('max_val', max_val, 'max_loc', max_loc)

@@ -109,9 +109,28 @@ def create_app() -> Flask:
             "interface_id": s.interface_id,
             "phase": getattr(s, "phase", None),
             "template": s.template_path,
+            "template_source": getattr(s, "template_source", None),
             "method": s.method,
             "click_mode": s.click_mode,
             "skill": s.skill,
+            "roi": getattr(s, "roi", None),
+            "roi_px": getattr(s, "roi_px", None),
+            "roi_reference_size": getattr(s, "roi_reference_size", None),
+            "compass": {
+                "enabled": getattr(s, "compass_auto_align", False),
+                "angle": getattr(s, "compass_angle_deg", None),
+                "last_aligned": getattr(s, "compass_last_aligned", None),
+                "roi": getattr(s, "compass_roi", None),
+            },
+            "world_tile": getattr(s, "world_tile", None),
+            "minimap": {
+                "toggle_key": getattr(s, "minimap_toggle_key", None),
+                "last_anchor": getattr(s, "minimap_last_anchor", None),
+                "anchor_interval": getattr(s, "minimap_anchor_interval_s", None),
+                "roi": getattr(s, "minimap_roi", None),
+            },
+            "interactables": getattr(s, "interactables", []),
+            "calibration": getattr(s, "calibration", {}),
             # Include config values when available
             "profile": profile_config,
             "keys": keys_config,
@@ -164,6 +183,97 @@ def create_app() -> Flask:
             return jsonify(rt.get_timeline())
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+
+    @app.get("/api/interactables/records")
+    def api_interactable_records():
+        try:
+            return jsonify(rt.list_interactable_records())
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.post("/api/interactables/record")
+    def api_interactable_record():
+        payload = request.get_json(force=True, silent=True) or {}
+        interactable_id = payload.get("interactable_id")
+        roi_rel = payload.get("roi_rel")
+        notes = payload.get("notes")
+        if not interactable_id or not isinstance(roi_rel, (list, tuple)) or len(roi_rel) != 2:
+            return jsonify({"error": "interactable_id and roi_rel[2] required"}), 400
+
+        snapshot = rt.snapshot()
+        roi_rect = None
+        last_result = snapshot.last_result or {}
+        if isinstance(last_result, dict) and isinstance(last_result.get("roi"), list) and len(last_result["roi"]) == 4:
+            roi_rect = last_result["roi"]
+        elif isinstance(snapshot.roi, (list, tuple)) and len(snapshot.roi) == 4:
+            # ROI stored as relative fractions; without window rect we cannot project accurately
+            return jsonify({"error": "ROI absolute coordinates unavailable"}), 409
+        if not roi_rect:
+            return jsonify({"error": "ROI data unavailable"}), 409
+
+        rx, ry, rw, rh = roi_rect
+        try:
+            fx = float(roi_rel[0])
+            fy = float(roi_rel[1])
+        except (TypeError, ValueError):
+            return jsonify({"error": "roi_rel must be numeric"}), 400
+        if rw <= 0 or rh <= 0:
+            return jsonify({"error": "ROI has zero size"}), 409
+
+        roi_x = int(round(fx * rw))
+        roi_y = int(round(fy * rh))
+        screen_x = int(round(rx + roi_x))
+        screen_y = int(round(ry + roi_y))
+
+        record = rt.record_interactable_position(
+            str(interactable_id),
+            roi_rel=(fx, fy),
+            roi_xy=(roi_x, roi_y),
+            screen_xy=(screen_x, screen_y),
+            notes=notes if isinstance(notes, str) and notes.strip() else None,
+        )
+        return jsonify(record)
+
+    @app.post("/api/interactables/save")
+    def api_interactable_save():
+        payload = request.get_json(force=True, silent=True) or {}
+        interactable_id = payload.get("interactable_id")
+        coords = payload.get("coords")
+        roi_xy = payload.get("roi_xy")
+        screen_xy = payload.get("screen_xy")
+        element_index = payload.get("element_index", 0)
+
+        if not interactable_id or not isinstance(coords, (list, tuple)) or len(coords) != 2:
+            return jsonify({"error": "interactable_id and coords[2] required"}), 400
+
+        try:
+            fx = float(coords[0])
+            fy = float(coords[1])
+        except (TypeError, ValueError):
+            return jsonify({"error": "coords must be numeric"}), 400
+
+        roi_tuple = None
+        if isinstance(roi_xy, (list, tuple)) and len(roi_xy) == 2:
+            roi_tuple = (int(roi_xy[0]), int(roi_xy[1]))
+        screen_tuple = None
+        if isinstance(screen_xy, (list, tuple)) and len(screen_xy) == 2:
+            screen_tuple = (int(screen_xy[0]), int(screen_xy[1]))
+
+        try:
+            profile = rt.save_interactable_profile(
+                str(interactable_id),
+                coords=(fx, fy),
+                roi_xy=roi_tuple,
+                screen_xy=screen_tuple,
+                element_index=int(element_index) if isinstance(element_index, int) or str(element_index).isdigit() else 0,
+            )
+        except FileNotFoundError:
+            return jsonify({"error": "profile not found"}), 404
+        except Exception as exc:
+            logger.exception("interactable save failed")
+            return jsonify({"error": str(exc)}), 500
+
+        return jsonify({"ok": True, "profile": profile})
 
     return app
 
