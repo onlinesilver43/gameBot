@@ -1,0 +1,109 @@
+id: carpenter
+name: "Carpenter Wood Processing Interface"
+description: "Automated wood processing and milling in Brighter Shores Carpenter's Workshop"
+
+# Wood types available for processing (from wiki)
+wood_types:
+  - name: "ash"
+    requires_lathe: false
+    xp_per_log: 56
+    level_requirement: 0
+    description: "Single-step processing"
+
+  - name: "juniper"
+    requires_lathe: false
+    xp_per_log: 70
+    level_requirement: 8
+    description: "Single-step processing"
+
+  - name: "oak"
+    requires_lathe: true
+    xp_per_log: 119
+    level_requirement: 2
+    description: "Two-step processing (saw + lathe)"
+
+  - name: "pine"
+    requires_lathe: true
+    xp_per_log: 127
+    level_requirement: 4
+    description: "Two-step processing (saw + lathe)"
+
+  - name: "hickory"
+    requires_lathe: true
+    xp_per_log: 135
+    level_requirement: 6
+    description: "Two-step processing (saw + lathe)"
+
+  - name: "poplar"
+    requires_lathe: true
+    xp_per_log: 164
+    level_requirement: 10
+    description: "Two-step processing (saw + lathe)"
+
+  - name: "suave"
+    requires_lathe: true
+    xp_per_log: 191
+    level_requirement: 12
+    description: "Two-step processing (saw + lathe)"
+
+  - name: "yew"
+    requires_lathe: true
+    xp_per_log: 223
+    level_requirement: 14
+    description: "Two-step processing (saw + lathe)"
+
+# Processing stations and their UI detection
+stations:
+  lumber_bank:
+    words: ["lumber", "bank", "withdraw"]
+    template: "assets/templates/carpentar/bank.png"
+    description: "Log storage and withdrawal"
+
+  circular_saw:
+    words: ["circular", "saw", "mill"]
+    template: "assets/templates/carpentar/saw.png"
+    description: "Primary wood processing station"
+
+  wood_lathe:
+    words: ["wood", "lathe", "turn"]
+    template: "assets/templates/carpentar/lather.png"
+    description: "Secondary processing for multi-step woods"
+
+  timber_merchant:
+    words: ["timber", "merchant", "sell"]
+    template: "assets/templates/carpentar/merchant.png"
+    description: "Product sales and coin collection"
+
+# UI interaction templates
+ui_templates:
+  open_deposit_box: "assets/templates/open_deposit_box.png"
+  use_item_on: "assets/templates/use_item_on.png"
+  trade: "assets/templates/trade.png"
+
+# Processing detection words
+processing_words:
+  start: ["process", "start", "use", "mill"]
+  active: ["processing", "working", "busy"]
+  complete: ["complete", "finished", "done", "ready", "collect"]
+
+# Bank operations
+bank_words:
+  withdraw: ["withdraw", "take", "12"]
+  deposit: ["deposit", "store", "bank"]
+
+# Merchant operations
+merchant_words:
+  sell: ["sell", "trade", "merchant"]
+
+# Processing settings
+batch_size: 12  # Logs to process per cycle (optimal from wiki)
+processing_timeout_seconds: 30
+collection_delay_seconds: 2
+
+# Detection settings
+template_threshold: 0.8
+ocr_confidence_threshold: 0.7
+
+# XP tracking (for future optimization)
+enable_xp_tracking: true
+optimal_wood_selection: true
